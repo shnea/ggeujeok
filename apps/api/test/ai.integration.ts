@@ -97,35 +97,49 @@ test('tags fill an empty draft without hiding an editor conflict; generated arti
   const next=await ai.requestSummary(another,owner);assert.notEqual(next.id,before.id,'a new configuration gets a new request UUID');
 });
 
-test('comments on AI-authored posts call the assistant without a keyword, including guests and replies',async()=>{
+test('replying to an AI comment calls the assistant without a keyword; AI article ownership does not',async()=>{
   const owner=await user('ai-call-owner'),member=await user('ai-call-member');
   const settings=await ai.settings();
   await ai.saveSettings({revision:settings.revision,data:{...settings.data,mentionsEnabled:true,commentsEnabled:false}},owner);
   const human=await post(owner,'사람의 글'),written=await post(owner,'루미의 글');
   await db.query(`UPDATE posts SET ai_generated=true,ai_identity='{"name":"루미","imageUrl":null}' WHERE id=$1`,[written]);
-  const plain=await comment(human,member,'잘 읽었어');
-  await db.transaction(tx=>enqueueAssistantReply(tx,human,plain,'잘 읽었어'));
-  assert.equal((await db.query('SELECT id FROM ai_tasks WHERE comment_id=$1',[plain])).rowCount,0,'category alone never identifies AI authorship');
-  const root=await comment(written,member,'이 글 이해했어?'),guest=await comment(written,null,'나도 궁금해');
-  await db.query('UPDATE comments SET parent_id=$2,reply_to_id=$2 WHERE id=$1',[guest,root]);
-  for(const [id,content] of [[root,'이 글 이해했어?'],[guest,'나도 궁금해']]){
-    await db.transaction(tx=>enqueueAssistantReply(tx,written,id,content));
-    await db.transaction(tx=>enqueueAssistantReply(tx,written,id,content));
-    const task=(await db.query('SELECT * FROM ai_tasks WHERE comment_id=$1',[id])).rows;
-    assert.equal(task.length,1);assert.equal(task[0].priority,true);
-    assert.equal((await ai.context(task[0]) as any).directMention,true);
+  for(const postId of [human,written]){
+    const plain=await comment(postId,member,'잘 읽었어');
+    await db.transaction(tx=>enqueueAssistantReply(tx,postId,plain,'잘 읽었어'));
+    assert.equal((await db.query('SELECT id FROM ai_tasks WHERE comment_id=$1',[plain])).rowCount,0,'article authorship and category never call the assistant');
   }
-  const task=(await db.query('SELECT id FROM ai_tasks WHERE comment_id=$1',[root])).rows[0];
-  await generated(task.id,{comment:'응! 여기서 새로 알게 된 게 있어 ✨'});await ai.apply(task.id,()=>{});
-  const reply=(await db.query('SELECT id,content FROM comments WHERE post_id=$1 AND ai_identity IS NOT NULL',[written])).rows[0];
-  await db.transaction(tx=>enqueueAssistantReply(tx,written,reply.id,reply.content));
-  assert.equal((await db.query('SELECT id FROM ai_tasks WHERE comment_id=$1',[reply.id])).rowCount,0,'AI never calls itself');
-  const guestTask=(await db.query('SELECT * FROM ai_tasks WHERE comment_id=$1',[guest])).rows[0];
-  await db.query('UPDATE posts SET comments_enabled=false WHERE id=$1',[written]);
+  const root=await comment(human,member,'@루미 안녕');
+  await db.transaction(tx=>enqueueAssistantReply(tx,human,root,'@루미 안녕'));
+  const first=(await db.query('SELECT id FROM ai_tasks WHERE comment_id=$1',[root])).rows[0];
+  await generated(first.id,{comment:'안녕! ✨'});await ai.apply(first.id,()=>{});
+  const lumi=(await db.query('SELECT id,content FROM comments WHERE post_id=$1 AND ai_identity IS NOT NULL',[human])).rows[0];
+  await db.transaction(tx=>enqueueAssistantReply(tx,human,lumi.id,lumi.content));
+  assert.equal((await db.query('SELECT id FROM ai_tasks WHERE comment_id=$1',[lumi.id])).rowCount,0,'AI never calls itself');
+  const memberReply=await comment(human,member,'이 글 이해했어?'),guestReply=await comment(human,null,'나도 궁금해');
+  for(const id of [memberReply,guestReply]){
+    await db.query('UPDATE comments SET parent_id=$2,reply_to_id=$3 WHERE id=$1',[id,root,lumi.id]);
+    const content=(await db.query('SELECT content FROM comments WHERE id=$1',[id])).rows[0].content;
+    await db.transaction(tx=>enqueueAssistantReply(tx,human,id,content));
+    await db.transaction(tx=>enqueueAssistantReply(tx,human,id,content));
+    const tasks=(await db.query('SELECT * FROM ai_tasks WHERE comment_id=$1',[id])).rows;
+    assert.equal(tasks.length,1);assert.equal(tasks[0].priority,true);
+    assert.equal((await ai.context(tasks[0]) as any).directMention,true);
+  }
+  const toHuman=await comment(human,member,'같은 대화의 다른 사람에게');
+  await db.query('UPDATE comments SET parent_id=$2,reply_to_id=$2 WHERE id=$1',[toHuman,root]);
+  await db.transaction(tx=>enqueueAssistantReply(tx,human,toHuman,'같은 대화의 다른 사람에게'));
+  assert.equal((await db.query('SELECT id FROM ai_tasks WHERE comment_id=$1',[toHuman])).rowCount,0,'an AI reply elsewhere in the thread is not a call');
+  const memberTask=(await db.query('SELECT id FROM ai_tasks WHERE comment_id=$1',[memberReply])).rows[0];
+  await generated(memberTask.id,{comment:'응, 환경 파일을 나누는 이야기였어! 😊'});await ai.apply(memberTask.id,()=>{});
+  assert.equal((await ai.task(memberTask.id)).state,'SUCCEEDED');
+  const guestTask=(await db.query('SELECT * FROM ai_tasks WHERE comment_id=$1',[guestReply])).rows[0];
+  await db.query('UPDATE posts SET comments_enabled=false WHERE id=$1',[human]);
   assert.equal(await ai.context(guestTask),null,'closing comments cancels pending replies');
-  await db.query('UPDATE posts SET comments_enabled=true WHERE id=$1',[written]);
+  await db.query('UPDATE posts SET comments_enabled=true WHERE id=$1',[human]);
+  await db.query("UPDATE comments SET status='DELETED',content='삭제된 댓글입니다.' WHERE id=$1",[lumi.id]);
+  assert.equal(await ai.context(guestTask),null,'a deleted AI target cancels implicit calls');
   const latest=await ai.settings();await ai.saveSettings({revision:latest.revision,data:{...latest.data,mentionsEnabled:false}},owner);
-  const disabled=await comment(written,member,'기능을 껐을 때');
-  await db.transaction(tx=>enqueueAssistantReply(tx,written,disabled,'기능을 껐을 때'));
+  const disabled=await comment(human,member,'@루미 기능을 껐을 때');
+  await db.transaction(tx=>enqueueAssistantReply(tx,human,disabled,'@루미 기능을 껐을 때'));
   assert.equal((await db.query('SELECT id FROM ai_tasks WHERE comment_id=$1',[disabled])).rowCount,0);
 });

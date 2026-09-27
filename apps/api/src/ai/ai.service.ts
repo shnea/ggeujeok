@@ -25,8 +25,9 @@ export async function enqueueAssistantReply(tx:PoolClient,postId:string,commentI
   if (!settings?.data.mentionsEnabled || !settings.data.name) return;
   await tx.query(`INSERT INTO ai_tasks(kind,post_id,post_version,comment_id,profile,settings_revision,priority)
     SELECT 'comment',p.id,p.version,$2,$3,$4,true FROM posts p JOIN comments c ON c.post_id=p.id AND c.id=$2
+    LEFT JOIN comments target ON target.id=COALESCE(c.reply_to_id,c.parent_id) AND target.post_id=c.post_id AND target.status='VISIBLE'
     WHERE p.id=$1 AND p.status='PUBLIC' AND p.comments_enabled AND c.status='VISIBLE' AND c.ai_identity IS NULL
-      AND (p.ai_generated OR $5)
+      AND (target.ai_identity IS NOT NULL OR $5)
     ON CONFLICT DO NOTHING`,[postId,commentId,settings.data,settings.revision,isMention(content,settings.data.mentionKeyword)]);
 }
 
@@ -153,10 +154,13 @@ export class Ai {
     const article = { title: p.title, text: p.content_text.slice(0, 48000), truncated: p.content_text.length>48000 };
     if (task.kind !== 'comment') return article;
     if (!(task.priority ? settings.data.mentionsEnabled : settings.data.commentsEnabled) || !p.comments_enabled) return null;
-    const c = (await query.query(`SELECT c.*,COALESCE(c.guest_name,u.custom_nickname,u.nickname,'회원') AS name
-      FROM comments c LEFT JOIN users u ON u.id=c.user_id WHERE c.id=$1 AND c.status='VISIBLE' AND c.ai_identity IS NULL`, [task.comment_id])).rows[0];
+    const c = (await query.query(`SELECT c.*,COALESCE(c.guest_name,u.custom_nickname,u.nickname,'회원') AS name,
+      target.ai_identity IS NOT NULL AS replies_to_assistant
+      FROM comments c LEFT JOIN users u ON u.id=c.user_id
+      LEFT JOIN comments target ON target.id=COALESCE(c.reply_to_id,c.parent_id) AND target.post_id=c.post_id AND target.status='VISIBLE'
+      WHERE c.id=$1 AND c.status='VISIBLE' AND c.ai_identity IS NULL`, [task.comment_id])).rows[0];
     if (!c || (!task.priority && c.user_id === p.author_id)) return null;
-    if (task.priority && !p.ai_generated && !isMention(c.content, settings.data.mentionKeyword)) return null;
+    if (task.priority && !c.replies_to_assistant && !isMention(c.content, settings.data.mentionKeyword)) return null;
     const answered = await query.query(`SELECT 1 FROM comments r LEFT JOIN users u ON u.id=r.user_id
       WHERE COALESCE(r.reply_to_id,r.parent_id)=$1 AND r.status='VISIBLE'
       AND (r.ai_identity IS NOT NULL OR r.user_id=$2 OR (u.issuer=$3 AND u.subject=$4)) LIMIT 1`,

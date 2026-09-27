@@ -86,7 +86,7 @@ export function AiSettingsForm({session}:{session:Session}) {
         <p className="field-help">최근 공개 댓글 최대 8개를 참고합니다. 관련 있는 이야기만 꺼내며, 삭제한 댓글은 다음 생성에서 제외합니다. 비회원은 현재 대화만 참고합니다.</p>
       </fieldset>
       <fieldset disabled={busy}><legend>도우미 호출</legend>
-        <label className="setting-toggle"><span><strong>호출·도우미 글의 댓글에 우선 답변</strong><small>키워드로 부르거나 도우미가 쓴 글에 댓글을 남기면 답합니다. 예약 댓글이 꺼져 있어도 동작하며, 한 번에 3개 제한과 별도로 처리합니다.</small></span><input type="checkbox" role="switch" checked={value.mentionsEnabled} disabled={!saved?.connected} onChange={e=>change({mentionsEnabled:e.target.checked})} /></label>
+        <label className="setting-toggle"><span><strong>호출·도우미 댓글의 답글에 우선 답변</strong><small>키워드로 부르거나 도우미의 댓글에 답글을 남기면 답합니다. 예약 댓글이 꺼져 있어도 동작하며, 한 번에 3개 제한과 별도로 처리합니다.</small></span><input type="checkbox" role="switch" checked={value.mentionsEnabled} disabled={!saved?.connected} onChange={e=>change({mentionsEnabled:e.target.checked})} /></label>
         <label htmlFor="ai-mention">호출 키워드</label><input id="ai-mention" value={value.mentionKeyword} maxLength={41} placeholder="@루미" required={value.mentionsEnabled} onChange={e=>change({mentionKeyword:e.target.value})} />
         <p className="field-help">댓글에 이 키워드를 쓰면 바로 생성을 요청합니다. 모델 응답 시간에 따라 잠시 기다릴 수 있습니다.</p>
       </fieldset>

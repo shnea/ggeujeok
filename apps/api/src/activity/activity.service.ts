@@ -67,7 +67,7 @@ export class Activity {
   async read(slug: string, session: Session | null, queryPage: unknown) {
     const page = pageInput.parse(queryPage);
     return this.db.transaction(async tx => {
-      const post = await tx.query("SELECT id,author_id,comments_enabled,ai_generated FROM posts WHERE slug=$1 AND status='PUBLIC' FOR SHARE", [slug]);
+      const post = await tx.query("SELECT id,author_id,comments_enabled FROM posts WHERE slug=$1 AND status='PUBLIC' FOR SHARE", [slug]);
       if (!post.rows[0]) throw new NotFoundException('글을 찾을 수 없습니다.');
       const id = post.rows[0].id;
       const comments = await tx.query(`SELECT ${commentFields},
@@ -85,7 +85,6 @@ export class Activity {
         AND kind='comment' AND state IN ('PENDING','QUEUED','RUNNING') AND created_at>now()-interval '5 minutes') AS pending`,[id])).rows[0].pending;
       const aiAssistant=(await tx.query(`SELECT data->>'name' AS name,data->>'mentionKeyword' AS keyword
         FROM ai_settings WHERE singleton=true AND data->>'mentionsEnabled'='true'`)).rows[0]??null;
-      if(aiAssistant)aiAssistant.respondsToPost=post.rows[0].ai_generated;
       return { ...counts.rows[0], comments: comments.rows, commentsEnabled: post.rows[0].comments_enabled, aiPending, aiAssistant, page };
     });
   }

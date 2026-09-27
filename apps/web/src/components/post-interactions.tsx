@@ -13,7 +13,7 @@ type Comment = {
   aiReplyState?: string|null; aiIdentity?: {name:string;imageUrl:string|null}|null; isDeleted: boolean; isGuest: boolean; isAuthor: boolean; createdAt: string; updatedAt: string;
   canEdit: boolean; canDelete: boolean; replyCount?: number;
 };
-type Activity = { aiAssistant?:{name:string;keyword:string;respondsToPost?:boolean}|null; aiPending?:boolean; comments: Comment[]; commentsEnabled: boolean; commentCount: number; threadCount: number; likeCount: number; liked: boolean; page: number };
+type Activity = { aiAssistant?:{name:string;keyword:string}|null; aiPending?:boolean; comments: Comment[]; commentsEnabled: boolean; commentCount: number; threadCount: number; likeCount: number; liked: boolean; page: number };
 type Replies = { items: Comment[]; total: number; page: number };
 type Action = { kind: 'reply' | 'edit' | 'delete'; comment: Comment; rootId: string };
 const date = (value: string) => new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Seoul' }).format(new Date(value));
@@ -188,9 +188,7 @@ export function PostInteractions({ postId, slug }: { postId: string; slug: strin
     {linkError&&<p className="notice" role="status">{linkError}</p>}
     {loading && <p role="status" className="field-help">댓글을 불러오는 중…</p>}
     {data && !data.commentsEnabled && <p className="notice" role="status">이 글은 새 댓글과 답글을 받지 않습니다.</p>}
-    {data?.commentsEnabled&&data.aiAssistant&&<p className="field-help ai-call-help"><Bot aria-hidden="true" /><span>{data.aiAssistant.respondsToPost
-      ? <>이 글에 댓글을 남기면 {data.aiAssistant.name}가 AI 답글을 준비해요.</>
-      : <><strong>{data.aiAssistant.keyword}</strong>로 부르면 {data.aiAssistant.name}가 AI 답글을 준비해요.</>} <a href="/privacy">이전 대화 참고 안내</a></span></p>}
+    {data?.commentsEnabled&&data.aiAssistant&&<p className="field-help ai-call-help"><Bot aria-hidden="true" /><span><strong>{data.aiAssistant.keyword}</strong>로 부르거나 {data.aiAssistant.name}의 댓글에 답글을 남기면 AI 답변을 준비해요. <a href="/privacy">이전 대화 참고 안내</a></span></p>}
     {data?.commentsEnabled && !action && session?.user && <CommentForm storageKey={`ggeujeok-comment:${postId}`} session={session} login={login} disabled={busy || loading || !data || !session.user.nickname}
       onSubmit={async (content, requestId) => { const result=await write<{id:string}>(`${path}/comments`, 'POST', { content, requestId }); savedRoot(result.id); }} />}
     {data?.commentsEnabled && !action && session && !session.user && <GuestCommentForm postId={postId} login={login} onSaved={savedRoot} />}
