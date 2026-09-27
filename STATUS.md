@@ -1,5 +1,6 @@
 # 현재 상태
 
+- 현재 이미지: `20260928-ads-txt`. `/ads.txt` 운영 200·게시자 ID·홈/health 정상 확인.
 - 단계: 운영 전환 완료. 공개 주소는 `https://shnea.kr`, 외부 NPM → 운영 NAS의 30145 포트다. 사용자가 접속 정상 확인.
 - 운영 파일: `/volume1/docker/prod/ggeujeok/{compose.yaml,.env.prod}`. 데이터: `/volume2/homes/ggeujeok/{db,uploads}`. 실제 값·백업·실행 자료는 Git 제외.
 - 범위: [요구사항 목차](REQUIREMENTS.md). 완료 상세: [이력](docs/history.md).

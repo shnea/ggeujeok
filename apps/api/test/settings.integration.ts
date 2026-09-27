@@ -31,6 +31,7 @@ test('only admins can persist ad switches, public flags update and resetting res
   const path = '/api/admin/settings/ads';
   const send = (who: typeof admin, method: string, body?: unknown) => fetch(origin+path, { method, headers: who.headers, body: body === undefined ? undefined : JSON.stringify({...base,...body as object}) });
   const publicFlags = async () => (await fetch(origin+'/api/public/settings/ads')).json();
+  const adsTxt = () => fetch(origin+'/api/public/settings/ads/ads.txt');
   try {
     assert.equal((await fetch(origin+path)).status,401);
     assert.equal((await send(member,'GET')).status,403);
@@ -40,8 +41,14 @@ test('only admins can persist ad switches, public flags update and resetting res
     assert.equal((await send(admin,'PUT',{enabled:false,showPlaceholders:true,client:'extra'})).status,400);
     const initial = await (await send(admin,'GET')).json() as any;
     assert.equal(initial.source,'environment');
+    assert.equal((await adsTxt()).status,404,'No seller is invented when the publisher ID is unset');
     assert.deepEqual(await publicFlags(),{provider:'adsense',enabled:false,showPlaceholders:false,adsense:emptyAdsense,adfit:null,feed:emptyFeed});
     assert.equal((await send(admin,'PUT',{enabled:false,showPlaceholders:true})).status,200);
+    const seller = await adsTxt();
+    assert.equal(seller.status,200);
+    assert.match(seller.headers.get('content-type')!,/^text\/plain; charset=utf-8$/);
+    assert.equal(seller.headers.get('cache-control'),'no-store');
+    assert.equal(await seller.text(),'google.com, pub-1234567890123456, DIRECT, f08c47fec0942fa0\n');
     assert.deepEqual(await publicFlags(),{provider:'adsense',enabled:false,showPlaceholders:true,adsense:emptyAdsense,adfit:null,feed:emptyFeed});
     assert.equal((await new AdSettings(db).read()).source,'admin','Settings survive service recreation');
     assert.equal((await send(admin,'PUT',{enabled:true,showPlaceholders:true})).status,200);
@@ -51,6 +58,7 @@ test('only admins can persist ad switches, public flags update and resetting res
     assert.equal((await send(admin,'PUT',{provider:'adfit',enabled:true,showPlaceholders:false})).status,200);
     assert.deepEqual(await publicFlags(),{provider:'adfit',enabled:true,showPlaceholders:false,adsense:emptyAdsense,adfit,feed:emptyFeed});
     assert.deepEqual((await (await send(admin,'GET')).json() as any).adsense,adsense,'Switch keeps inactive provider credentials');
+    assert.equal((await adsTxt()).status,200,'Provider selection does not remove a registered AdSense seller');
     assert.equal((await send(admin,'PUT',{provider:'adfit',enabled:true,showPlaceholders:false,adfit:{...adfit,post:{unitId:'DAN-post',size:'123x45'}}})).status,400);
     assert.equal((await send(admin,'PUT',{provider:'adfit',enabled:true,showPlaceholders:false,adfit:{...adfit,post:{unitId:'<script>',size:'300x250'}}})).status,400);
     const feed = {enabled:true,slot:'987',layoutKey:'-ab+cd_12'};
@@ -66,6 +74,7 @@ test('only admins can persist ad switches, public flags update and resetting res
     assert.deepEqual((await publicFlags()).feed,{...emptyFeed,enabled:true},'Preview exposes no live feed credentials');
     assert.equal((await send(member,'DELETE')).status,403);
     assert.equal((await send(admin,'DELETE')).status,200);
+    assert.equal((await adsTxt()).status,404,'Resetting the publisher ID updates ads.txt immediately');
     assert.deepEqual(await publicFlags(),{provider:'adsense',enabled:false,showPlaceholders:false,adsense:emptyAdsense,adfit:null,feed:emptyFeed});
     assert.equal((await (await send(admin,'GET')).json() as any).source,'environment');
     assert.equal((await db.query("SELECT count(*)::int AS count FROM audit_events WHERE actor_id=$1 AND action IN ('ads.update','ads.reset')",[admin.id])).rows[0].count,7);

@@ -133,6 +133,8 @@ docker compose --env-file .env.dev ps
 
 기본 서비스는 `ADS_PROVIDER=adsense` 또는 `adfit`이다. 관리자 화면에서 서비스와 입력값을 함께 저장하며 두 서비스의 값은 전환해도 보존한다. AdSense는 게시자 ID(`ca-pub-`+16자리)와 글 하단 슬롯을 입력하고 오른쪽·중간 슬롯은 선택한다. 애드핏은 위치별 광고단위 ID와 발급된 크기를 입력하며 글 하단 ID가 필수다. 실제 광고를 켤 때 선택한 서비스의 필수 입력을 서버에서 검증한다. 임의 HTML·스크립트 입력은 받지 않는다.
 
+`/ads.txt`는 저장한 AdSense 게시자 ID로 자동 제공한다. `ca-pub-`를 `pub-`로 변환해 Google DIRECT 행을 반환하며 광고 활성화·슬롯 발급 여부와 무관하게 유지한다. 게시자 ID가 없으면 404이고, 조회 실패는 오류로 응답해 빈 성공 파일을 만들지 않는다. 별도 파일 편집 없이 광고 설정을 변경하면 반영된다. 형식은 [Google ads.txt 안내](https://support.google.com/adsense/answer/12171612?hl=ko)를 따른다.
+
 AdSense의 초기값만 기존 `ADSENSE_CLIENT_ID`, `ADSENSE_POST_SLOT`, `ADSENSE_SIDEBAR_SLOT`, `ADSENSE_INLINE_SLOT`에서도 읽는다. 애드핏의 발급값은 관리 화면에서 저장한다. 환경변수 기본값 사용은 저장한 서비스 선택·발급값·스위치를 지우고 환경값으로 복귀하므로 다시 입력할 값은 따로 보관한다. 새 스위치 환경변수가 없을 때 기존 `ADSENSE_ENABLED`·`ADSENSE_SHOW_PLACEHOLDERS`도 호환한다. 기본 환경변수를 바꾼 경우 `docker compose --env-file .env.dev up -d --no-deps api`로 API를 재생성한다. Web은 API 설정을 매번 읽으므로 재빌드·재시작이 필요 없다. `.env.build`에는 이 런타임 값을 넣지 않는다. 공개 설정 조회 실패 시 광고와 자리를 모두 숨긴다.
 
 자리 표시 모드는 발급값 없이 합의된 배치를 확인할 수 있다. 애드핏은 발급 크기를 바꾸거나 축소하지 않고, 영역보다 큰 광고는 SDK를 로드하지 않는다. 기본 추천 크기는 하단 300×250, 오른쪽 160×600, 중간 728×90이며 반드시 실제 발급 크기와 일치해야 한다. 공식 지원 크기·설치 규약은 [애드핏 웹 가이드](https://adfit.github.io/wiki/web-guide/)와 [SDK 안내](https://github.com/adfit/adfit-web-sdk)를 따른다. 네이버 애드포스트는 사용자 요청으로 제외했다.
