@@ -50,6 +50,7 @@
 | `.env.prod` | 운영 | 배포 이미지 버전·도메인·DB·OIDC·플랫폼·n8n·운영 비밀값 |
 
 - 운영 배포 디렉터리의 기본 파일은 **`.env.prod`와 `compose.yaml` 두 개**다. 환경 선택은 Compose의 `--env-file`로 명시하고 자동 `.env`에 의존하지 않는다.
+- 사용자 지정 운영 경로는 `/volume1/docker/prod/ggeujeok`이다. DB는 `.env.prod`의 `DB_DATA_PATH=/volume2/homes/ggeujeok/db`, 업로드 임시 데이터는 `UPLOAD_DATA_PATH=/volume2/homes/ggeujeok/uploads`로 bind mount한다. 두 값이 없는 개발 환경은 기존 Docker named volume을 그대로 사용한다.
 - 운영 계약은 `.env.prod`를 선택한 이미지 pull → `up -d`다. 명령은 아래 실행 절차를 따른다. 실제 운영 레지스트리 pull·배포 검수는 별도다.
 - `compose.yaml`은 이미지 실행 전용으로 소스 경로·build·개발 환경 파일 참조를 넣지 않는다. 운영에는 Git clone·Dockerfile·로컬 소스·Node.js 설치가 필요 없어야 한다.
 - 로컬 전용 `compose.build.yaml` 한 개가 web·api·nginx 빌드를 독립적으로 정의한다. `.env.dev`로 개발 이미지를, `.env.build`로 운영 이미지를 빌드·push한다. 운영에 이 파일을 배포하지 않는다.
@@ -70,7 +71,7 @@
 - DEV와 PROD의 Compose 프로젝트 이름·볼륨·키·데이터를 분리한다. 로컬은 빌드된 개발 태그, 운영은 검증된 배포 태그를 사용한다.
 - Nginx 설정 템플릿·기동 스크립트·마이그레이션을 해당 이미지에 포함한다. 운영 디렉터리에서 개별 설정을 bind mount하는 방식을 기본으로 하지 않는다.
 - DB 준비 → 일회성 마이그레이션 성공 → API/worker 시작 순서를 둔다. 마이그레이션 실패를 정상 기동으로 표시하지 않는다.
-- DB·업로드 임시 원본·인증서는 Docker 관리 볼륨을 기본으로 한다. 두 배포 파일 원칙이 영속 데이터·Docker 설치·레지스트리 인증까지 두 파일에 넣는다는 뜻은 아니다.
+- 운영 DB·업로드 임시 원본은 위 사용자 지정 경로에 보관한다. TLS 인증서는 기존 외부 NPM에서 관리한다. 두 배포 파일 원칙이 영속 데이터·Docker 설치·레지스트리 인증까지 두 파일에 넣는다는 뜻은 아니다.
 - TLS 발급/갱신은 컨테이너와 관리 볼륨 또는 기존 인프라에서 처리한다. 외부 발급 인증서·백업 자격증명 파일이 불가피할 때만 최소 예외와 이유를 기록한다. 인증서 개인키를 이미지에 넣지 않는다.
 - 레지스트리 인증은 Docker 자격증명 관리로 처리한다. 업데이트에서 DB 볼륨을 삭제하지 않고 정상 배포 절차에 볼륨 삭제 명령을 넣지 않는다.
 
@@ -86,6 +87,27 @@
 - 상태 확인·서비스별 로그·실패 Job·재처리·백업/복원·롤백 절차는 실제 구현과 함께 확정하고 검증한다. n8n·알림·통계·로그 장애는 글 저장/조회와 분리한다.
 
 ### 현재 실행 절차
+
+운영 서버의 최종 배치는 다음과 같다. `uploads`는 업로드 중인 임시 원본/조각이며 완료된 이미지 원본은 플랫폼에 있다. 글·댓글·분류·사이트/광고/루미 설정은 DB 이전 대상이다.
+
+```text
+/volume1/docker/prod/ggeujeok/
+  compose.yaml
+  .env.prod
+/volume2/homes/ggeujeok/
+  db/
+  uploads/
+```
+
+새 운영 폴더를 처음 준비할 때 아래처럼 만든다. 기존 데이터가 있다면 먼저 백업·소유권을 확인하며 초기화하지 않는다. API/worker의 업로드 사용자는 현재 이미지의 UID/GID `1000:1000`이다. DB 디렉터리의 컨테이너 사용자 소유권은 PostgreSQL 이미지 진입점이 설정한다. NAS의 상위 디렉터리 ACL도 해당 접근을 허용해야 한다.
+
+```sh
+sudo mkdir -p /volume1/docker/prod/ggeujeok /volume2/homes/ggeujeok/db /volume2/homes/ggeujeok/uploads
+sudo chown 1000:1000 /volume2/homes/ggeujeok/uploads
+sudo chmod 700 /volume2/homes/ggeujeok/db /volume2/homes/ggeujeok/uploads
+```
+
+현재 개발 DB의 dump/복원과 기존 플랫폼 파일 접근 검증을 마친 뒤 운영 API/worker를 시작한다. 빈 운영 DB로 먼저 공개 전환하지 않는다. 위 폴더 생성·복원은 실제 서버에서 아직 실행하지 않았다.
 
 최초 준비 때만 `.env.dev.example`을 `.env.dev`로 복사한다. 이미 설정한 파일은 덮어쓰지 않는다. 플랫폼 입력은 해당 환경의 실제 값을 사용하며 비밀값을 출력하는 `docker compose config` 대신 `config --quiet`로 검사한다.
 

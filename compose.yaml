@@ -46,7 +46,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-ggeujeok}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
     volumes:
-      - database:/var/lib/postgresql/data
+      - ${DB_DATA_PATH:-database}:/var/lib/postgresql/data
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 5s
@@ -67,7 +67,7 @@ services:
     image: ${IMAGE_PREFIX:?IMAGE_PREFIX required}-api:${IMAGE_TAG:?IMAGE_TAG required}
     environment: *api-environment
     volumes:
-      - uploads:/app/uploads
+      - ${UPLOAD_DATA_PATH:-uploads}:/app/uploads
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -83,7 +83,7 @@ services:
     environment: *api-environment
     command: [node, apps/api/dist/worker.js]
     volumes:
-      - uploads:/app/uploads
+      - ${UPLOAD_DATA_PATH:-uploads}:/app/uploads
     depends_on:
       migrate:
         condition: service_completed_successfully
