@@ -45,13 +45,13 @@
 
 | 파일 | 위치 | 책임 |
 | --- | --- | --- |
-| `.env.dev` | 로컬 | 개발 이미지·포트·DEV 플랫폼·개발 DB·도메인을 통한 실행/테스트 |
+| `.env.dev` | 로컬 | 개발 이미지·포트·개발 DB·localhost 실행/테스트. 실제 연동은 DEV 값 준비 후 연결 |
 | `.env.build` | 로컬 | 운영 이미지 이름·고정 태그·레지스트리·대상 아키텍처·비밀값 없는 빌드 설정 |
 | `.env.prod` | 운영 | 배포 이미지 버전·도메인·DB·OIDC·플랫폼·n8n·운영 비밀값 |
 
 - 운영 배포 디렉터리의 기본 파일은 **`.env.prod`와 `compose.yaml` 두 개**다. 환경 선택은 Compose의 `--env-file`로 명시하고 자동 `.env`에 의존하지 않는다.
 - 사용자 지정 운영 경로는 `/volume1/docker/prod/ggeujeok`이다. DB는 `.env.prod`의 `DB_DATA_PATH=/volume2/homes/ggeujeok/db`, 업로드 임시 데이터는 `UPLOAD_DATA_PATH=/volume2/homes/ggeujeok/uploads`로 bind mount한다. 두 값이 없는 개발 환경은 기존 Docker named volume을 그대로 사용한다.
-- 운영 계약은 `.env.prod`를 선택한 이미지 pull → `up -d`다. 명령은 아래 실행 절차를 따른다. 실제 운영 레지스트리 pull·배포 검수는 별도다.
+- 운영 계약은 `.env.prod`를 선택한 이미지 pull → `up -d`다. 명령은 아래 실행 절차를 따른다. 현재 배포 결과와 미검증 범위는 [현재 상태](../STATUS.md)에 기록한다.
 - `compose.yaml`은 이미지 실행 전용으로 소스 경로·build·개발 환경 파일 참조를 넣지 않는다. 운영에는 Git clone·Dockerfile·로컬 소스·Node.js 설치가 필요 없어야 한다.
 - 로컬 전용 `compose.build.yaml` 한 개가 web·api·nginx 빌드를 독립적으로 정의한다. `.env.dev`로 개발 이미지를, `.env.build`로 운영 이미지를 빌드·push한다. 운영에 이 파일을 배포하지 않는다.
 - `.env.build`만으로 운영 이미지를 만들 수 있어야 한다. 운영 DB·플랫폼 키·`.env.prod` 또는 실행 시 설정이 빌드에 필요해서는 안 된다.
@@ -63,7 +63,9 @@
 ### 이미지·서비스·영속 데이터
 
 - 단일 서버 Compose를 기본으로 Nginx·web·api·worker·PostgreSQL을 운영한다. DB/API 포트는 외부 공개하지 않는다. worker는 API 이미지의 `apps/api/dist/worker.js`를 실행하며 추가 환경 파일·큐 서버 없이 기존 DB를 사용한다.
-- 개발·검수 주소도 `https://shnea.kr`이다. 외부 NPM이 HTTPS를 종료하고 끄적 호스트의 **HTTP 30145 → 컨테이너 Nginx 8080**으로 전달한다. 30140은 다른 서비스이므로 사용하지 않는다. 브라우저 검수를 localhost로 대체하지 않는다.
+- 운영 주소는 `https://shnea.kr`이며 외부 NPM이 HTTPS를 종료하고 운영 서버의 **HTTP 30145 → 컨테이너 Nginx 8080**으로 전달한다. 로컬 개발 주소는 `http://localhost:30145`이고 `HOST_BIND=127.0.0.1`로 이 PC에서만 접근한다. 30140은 다른 서비스이므로 사용하지 않는다.
+- 현재 로컬 플랫폼·OIDC·n8n 런타임 값은 비워 두고 worker를 중지한다. 공개 화면과 격리 테스트·모의 관리자 화면부터 확인한다. 실제 로그인·업로드·자동화는 DEV 환경과 콜백 연결 후 검수하며 인증 우회 기능을 만들지 않는다.
+- NAS의 자동 네트워크 주소 풀이 부족해 운영 `.env.prod`의 `DOCKER_SUBNET=10.250.20.0/24`를 사용한다. 다른 서버에서는 기존 네트워크·라우팅과 충돌하지 않는 범위를 확인하며, 비우면 Docker 자동 할당을 따른다.
 - 사용자 요청에 따라 이전 호스트용 설정·자동 이동 기능은 두지 않는다. 호스트 변경 뒤에는 쿠키가 공유되지 않아 새 주소에서 다시 로그인해야 한다.
 - NPM의 호스트명·인증서·전달 주소가 준비되어야 실제 도메인 검수가 가능하다. 끄적 이미지에 TLS 개인키를 넣거나 NPM 구성을 임의로 변경하지 않는다.
 - 이미지 규칙은 `registry.shnea.kr/ggeujeok-{web|api|nginx}:{tag}`다. 운영은 고정 버전·digest를 기록한다. worker·마이그레이션은 api 이미지를 재사용한다.
@@ -107,18 +109,19 @@ sudo chown 1000:1000 /volume2/homes/ggeujeok/uploads
 sudo chmod 700 /volume2/homes/ggeujeok/db /volume2/homes/ggeujeok/uploads
 ```
 
-현재 개발 DB의 dump/복원과 기존 플랫폼 파일 접근 검증을 마친 뒤 운영 API/worker를 시작한다. 빈 운영 DB로 먼저 공개 전환하지 않는다. 위 폴더 생성·복원은 실제 서버에서 아직 실행하지 않았다.
+최초 이전은 DB dump/복원과 기존 플랫폼 파일 접근 검증 후 공개 전환했다. 운영에는 새 글·이미지가 추가되고 있으므로 이전 개발 DB를 다시 복원해 덮어쓰지 않는다. 최초 이전 결과는 [이력](history.md)에 기록한다.
 
 최초 준비 때만 `.env.dev.example`을 `.env.dev`로 복사한다. 이미 설정한 파일은 덮어쓰지 않는다. 플랫폼 입력은 해당 환경의 실제 값을 사용하며 비밀값을 출력하는 `docker compose config` 대신 `config --quiet`로 검사한다.
 
 ```sh
 docker compose --env-file .env.dev -f compose.build.yaml build
 docker compose --env-file .env.dev config --quiet
-docker compose --env-file .env.dev up -d
+docker compose --env-file .env.dev stop worker
+docker compose --env-file .env.dev up -d db api web nginx
 docker compose --env-file .env.dev ps
 ```
 
-브라우저 확인 주소는 `https://shnea.kr`, 상태 확인은 같은 도메인의 `/api/health`다. 소스 변경 후 영향받은 이미지의 build와 up을 다시 실행한다. 개발 이미지도 소스를 이미지에 포함하며 현재 자동 재빌드는 하지 않는다.
+로컬 브라우저 확인 주소는 `http://localhost:30145`, 상태 확인은 같은 주소의 `/api/health`다. 소스 변경 후 영향받은 이미지의 build와 up을 다시 실행한다. 개발 이미지도 소스를 이미지에 포함하며 현재 자동 재빌드는 하지 않는다.
 
 광고의 기본값은 `.env.dev`/`.env.prod`의 `ADS_ENABLED=false`(실제 광고), `ADS_SHOW_PLACEHOLDERS=false`(광고가 꺼졌을 때 자리 표시)다. 관리자 [광고 설정](https://shnea.kr/admin/settings)에서 저장한 값이 우선하며 `환경변수 기본값 사용`으로 저장값을 지운다. 관리자 저장은 DB에 보존되고 다음 글 열람부터 적용되므로 재배포가 필요 없다. API는 설정 변경·초기화의 관리자 감사 기록을 남긴다.
 
@@ -147,16 +150,45 @@ docker compose -f compose.test.yaml down
 
 통합 테스트는 외부 포트를 열지 않는 별도 네트워크·임시 메모리 DB를 사용한다. `.env.dev`·실계정·개발 데이터에 접근하지 않는다. 먼저 위 개발 API 이미지를 빌드해야 한다.
 
-운영 이미지는 `.env.build.example`을 참고해 로컬 `.env.build`의 고정 태그·대상 아키텍처를 정한 뒤 빌드한다. 아래 push/pull은 실제 레지스트리 권한이 준비된 뒤 수행하는 운영 절차이며 현재 수행 완료를 뜻하지 않는다.
+### 수정 후 Git 저장과 운영 업데이트
+
+Git push는 소스 저장이고, 이미지 push는 배포할 실행 파일 업로드다. Git만 push해도 운영이 자동 갱신되지는 않는다. 로컬 검수 후 저장소 루트에서 변경 파일을 확인해 커밋한다. 실제 `.env.*`·DB·백업·`output/`은 올리지 않는다.
+
+```sh
+git status --short
+git diff
+# 수정한 파일만 지정
+git add <수정한-파일>
+git commit -m "변경 내용"
+git push origin main
+```
+
+로컬 `.env.build`의 `IMAGE_TAG`를 매번 새 고정 태그(예: 날짜-커밋번호)로 바꾸고 `TARGET_PLATFORM=linux/amd64`, `BUILD_TARGET=production`을 유지한다. 기존 배포 태그는 덮어쓰지 않는다. 레지스트리는 현재 별도 로그인 없이 사용한다.
 
 ```sh
 docker compose --env-file .env.build -f compose.build.yaml build
 docker compose --env-file .env.build -f compose.build.yaml push
-# 운영 서버: compose.yaml과 .env.prod만 배치
-docker compose --env-file .env.prod config --quiet
-docker compose --env-file .env.prod pull
-docker compose --env-file .env.prod up -d
 ```
+
+현재 NAS는 `docker compose` 대신 `/usr/local/bin/docker-compose`를 사용한다. `compose.yaml` 자체가 바뀐 경우에만 로컬의 최신 파일을 아래 경로로 함께 전달한다. 운영 `.env.prod`를 개발 파일로 덮어쓰지 않는다.
+
+```sh
+scp -P 9022 compose.yaml shpark@192.168.0.93:/volume1/docker/prod/ggeujeok/compose.yaml
+ssh -p 9022 shpark@192.168.0.93
+cd /volume1/docker/prod/ggeujeok
+```
+
+운영 `.env.prod`의 기존 `IMAGE_TAG`를 기록하고 새 이미지와 같은 값으로 바꾼다. 배포 전 운영 DB 백업을 확보한다. 특히 마이그레이션이 있다면 복원 절차와 이전 이미지 호환성을 확인한다. 이후 NAS에서 실행한다.
+
+```sh
+/usr/local/bin/docker-compose --env-file .env.prod config --quiet
+/usr/local/bin/docker-compose --env-file .env.prod pull
+/usr/local/bin/docker-compose --env-file .env.prod up -d
+/usr/local/bin/docker-compose --env-file .env.prod ps
+/usr/local/bin/docker-compose --env-file .env.prod logs --tail=80 migrate api worker web nginx
+```
+
+마이그레이션 종료 0·서비스 상태와 `https://shnea.kr/api/health`, 실제 수정한 화면을 확인한다. 앱 코드는 이미지로 갱신되고 `/volume2/homes/ggeujeok`의 데이터는 유지한다. 운영에서 Git pull이나 소스 빌드는 필요 없다. 정상 업데이트에 `down -v`나 DB 폴더 삭제를 사용하지 않는다. DB 변경이 이전 이미지와 호환될 때는 태그를 이전 값으로 되돌려 pull/up으로 복귀할 수 있다.
 
 <a id="site-settings"></a>
 
@@ -165,12 +197,15 @@ docker compose --env-file .env.prod up -d
 기능 정책은 [AI 도우미](content.md#automation)를 따른다. 끄적 전용 워크플로는 `scripts/n8n-workflows.mjs`에서 만들고 다음 명령으로 등록·갱신한다.
 
 ```sh
+# DEV 연동을 준비한 뒤에만 실행
 node --env-file=.env.dev scripts/provision-n8n.mjs
+# 운영 워크플로를 수정해야 할 때만 로컬에서 실행
+node --env-file=.env.dev --env-file=.env.prod scripts/provision-n8n.mjs
 ```
 
 - 로컬 관리용 `N8N_MANAGEMENT_API_KEY`는 n8n 관리 API 키다. API/worker 컨테이너나 브라우저에 넣지 않는다. 기존 OpenRouter 자격증명을 참조하며 그 키를 복사하거나 변경하지 않는다.
 - 실행 환경은 `N8N_WEBHOOK_BASE_URL`, `N8N_WEBHOOK_TOKEN`, `AI_CALLBACK_TOKEN`을 API/worker에 주입한다. 웹훅 인증과 결과 보관 인증은 별도 키를 쓴다. 실제 값은 해당 환경 파일과 n8n 자격증명에만 둔다.
-- 등록 스크립트는 `output/n8n/ggeujeok-resources.json`에 기록한 끄적 리소스만 갱신한다. 기존 워크플로가 보존됐는지 비교하고, 사용자가 고른 워크플로별 모델도 유지한다. 이 로컬 관리 자료를 잃었다면 재등록 전에 기존 끄적 리소스 ID를 확인한다.
+- 등록 스크립트는 개발 `output/n8n/ggeujeok-resources.json`, 운영 `output/n8n/ggeujeok-resources-production.json`에 기록한 끄적 리소스만 갱신한다. 기존 워크플로가 보존됐는지 비교하고, 사용자가 고른 워크플로별 모델도 유지한다. 이 로컬 관리 자료를 잃었다면 재등록 전에 기존 끄적 리소스 ID를 확인한다.
 - 개발 일반 큐와 호출 전용 큐를 분리한다. 플랫폼 키의 프로젝트·환경을 검사하며 일반 작업과 `@루미` 호출 소비자를 독립 실행한다. 이미지에 비밀값을 넣지 않는다.
 - 워크플로 실행 내용의 n8n 저장은 끈다. 무료 모델 시간 초과·형식 실패는 관리자 작업 목록에서 확인한다. 실행 결과가 불명확한 요청을 무조건 재실행하지 않는다.
 
@@ -196,7 +231,7 @@ node --env-file=.env.dev scripts/provision-n8n.mjs
 | 항목 | 확인할 값 |
 | --- | --- |
 | 플랫폼·로그인 | [플랫폼 필수 입력](platform-integration.md#inputs) |
-| n8n | 개발 전용 워크플로 4개와 인증 연결 완료. 실제 생성 검증 범위·남은 항목은 [현재 상태](../STATUS.md) 참조. 운영 환경의 별도 키·큐·워크플로 검수 필요 |
+| n8n | 운영 전용 워크플로 4개·키·큐를 분리했고 기존 워크플로는 유지. 실제 생성 검증 범위는 [현재 상태](../STATUS.md) 참조. 로컬 런타임 연결은 보류 |
 | 배포 | 서버·CPU 아키텍처·도메인/TLS 관리 방식·레지스트리 접근 |
 | 복구 | 외부 백업 저장소·자격증명 주입 방식·플랫폼 파일 백업 범위·운영 확인 경로 |
 | Google | GA 측정 ID·Search Console 확인값·AdSense 계정/광고 설정과 외부 승인 상태 |

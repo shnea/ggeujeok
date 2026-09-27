@@ -1,12 +1,16 @@
-// Usage: node --env-file=.env.dev scripts/provision-n8n.mjs
+// Development: node --env-file=.env.dev scripts/provision-n8n.mjs
+// Production: node --env-file=.env.dev --env-file=.env.prod scripts/provision-n8n.mjs
 // The ignored manifest limits updates to resources created by this script.
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { randomBytes, createHash } from 'node:crypto';
 import { buildWorkflow } from './n8n-workflows.mjs';
 
-const origin='https://n8n.shnea.kr', file='output/n8n/ggeujeok-resources.json';
+const origin='https://n8n.shnea.kr';
 const environment=process.env.APP_ENV;
 if(!['development','production'].includes(environment) || !process.env.N8N_MANAGEMENT_API_KEY)throw Error('Management key and APP_ENV required');
+const envFile=environment==='production'?'.env.prod':'.env.dev';
+const manifestSuffix=environment==='production'?'-production':'';
+const file=`output/n8n/ggeujeok-resources${manifestSuffix}.json`;
 const siteUrl=new URL(process.env.SITE_URL).origin;
 await mkdir('output/n8n',{recursive:true});
 let manifest;
@@ -24,8 +28,8 @@ if(existing.nextCursor)throw Error('Paginated baseline needs explicit handling')
 const owned=new Set(Object.values(manifest.workflows));
 const hash=w=>createHash('sha256').update(JSON.stringify({nodes:w.nodes,connections:w.connections,settings:w.settings,active:w.active})).digest('hex');
 const baseline=existing.data.filter(w=>!owned.has(w.id)).map(w=>({id:w.id,hash:hash(w)}));
-await writeFile('output/n8n/preserved-workflows.json',JSON.stringify(baseline),{mode:0o600});
-let envText=await readFile('.env.dev','utf8');
+await writeFile(`output/n8n/preserved-workflows${manifestSuffix}.json`,JSON.stringify(baseline),{mode:0o600});
+let envText=await readFile(envFile,'utf8');
 for(const name of ['N8N_WEBHOOK_TOKEN','AI_CALLBACK_TOKEN']){
   if(!process.env[name]){
     if(Object.keys(manifest.credentials).length)throw Error('Credential exists but local token missing');
@@ -35,7 +39,7 @@ for(const name of ['N8N_WEBHOOK_TOKEN','AI_CALLBACK_TOKEN']){
   }
 }
 if(!process.env.N8N_WEBHOOK_BASE_URL)envText=`${envText.trimEnd()}\nN8N_WEBHOOK_BASE_URL=${origin}/webhook\n`;
-await writeFile('.env.dev',envText,{mode:0o600});
+await writeFile(envFile,envText,{mode:0o600});
 for(const [key,name,value] of [['webhook','X-Ggeujeok-Key',process.env.N8N_WEBHOOK_TOKEN],['callback','Authorization',`Bearer ${process.env.AI_CALLBACK_TOKEN}`]]){
   if(!manifest.credentials[key]){
     const credential=await request('/credentials','POST',{name:`끄적 ${environment} ${key}`,type:'httpHeaderAuth',data:{name,value}});

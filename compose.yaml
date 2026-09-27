@@ -113,3 +113,9 @@ services:
 volumes:
   database:
   uploads:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${DOCKER_SUBNET:-}
