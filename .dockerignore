@@ -1,0 +1,11 @@
+.git
+.idea
+node_modules
+**/node_modules
+**/.next
+**/dist
+.env*
+output
+.playwright-cli
+.impeccable
+*.log

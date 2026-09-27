@@ -1,0 +1,22 @@
+.form { padding-block: 0 32px; border-bottom: 1px solid var(--line); }
+.form h2 { margin-bottom: 20px; }
+.form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.fields { display: grid; grid-template-columns: 1fr 1.5fr 160px; gap: 24px; }
+.fields label { display: flex; flex-direction: column; gap: 8px; font-weight: 500; min-width: 0; }
+.fields > div { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.help { display: block; font-size: 13px; font-weight: 400; color: var(--muted); }
+.feedback { min-height: 32px; padding-top: 8px; color: var(--green); }
+.listHeading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-block: 24px 12px; }
+.listHeading span { color: var(--muted); font-size: 16px; font-weight: 400; }
+.list { list-style: none; padding: 0; margin: 24px 0 64px; border-top: 1px solid var(--line); }
+.list li { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-block: 24px; border-bottom: 1px solid var(--line); }
+.description { min-width: 0; }
+.description h3 { font-size: 18px; }
+.description a, .description p { font-size: 13px; color: var(--muted); }
+.description p { margin-top: 8px; font-variant-numeric: tabular-nums; }
+.actions { display: flex; gap: 12px; flex-shrink: 0; }
+@media (max-width: 700px) {
+  .fields { grid-template-columns: 1fr; gap: 20px; }
+  .list li { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .actions { align-self: flex-end; }
+}

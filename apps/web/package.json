@@ -1,0 +1,20 @@
+{
+  "name": "@ggeujeok/web",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 0.0.0.0 --port 3000",
+    "build": "next build",
+    "start": "next start --hostname 0.0.0.0 --port 3000",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@fontsource/noto-sans-kr": "5.3.0",
+    "@fontsource/noto-serif-kr": "5.3.0",
+    "@shnea/editor": "file:../../vendor/shnea-editor-0.1.0-alpha.9.tgz",
+    "lucide-react": "1.48.0",
+    "next": "16.3.6",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

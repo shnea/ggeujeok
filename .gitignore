@@ -1,0 +1,16 @@
+node_modules/
+.next/
+dist/
+.env
+.env.dev
+.env.build
+.env.prod
+.env.test
+.idea/
+.DS_Store
+output/
+.playwright-cli/
+.impeccable/
+coverage/
+*.tsbuildinfo
+*.log

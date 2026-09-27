@@ -1,0 +1,109 @@
+name: ${COMPOSE_PROJECT_NAME:-ggeujeok}
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+
+x-api-environment: &api-environment
+  APP_ENV: ${APP_ENV:-production}
+  SITE_URL: ${SITE_URL:?SITE_URL required}
+  PORT: 30101
+  PGHOST: db
+  PGPORT: 5432
+  PGDATABASE: ${POSTGRES_DB:-ggeujeok}
+  PGUSER: ${POSTGRES_USER:-ggeujeok}
+  PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+  PLATFORM_OIDC_ISSUER: ${PLATFORM_OIDC_ISSUER:-}
+  PLATFORM_OIDC_CLIENT_ID: ${PLATFORM_OIDC_CLIENT_ID:-app}
+  PLATFORM_OIDC_REDIRECT_URI: ${PLATFORM_OIDC_REDIRECT_URI:-}
+  OIDC_POST_LOGOUT_REDIRECT_URI: ${OIDC_POST_LOGOUT_REDIRECT_URI:-}
+  ADMIN_OIDC_ISSUER: ${ADMIN_OIDC_ISSUER:-}
+  ADMIN_OIDC_SUBJECT: ${ADMIN_OIDC_SUBJECT:-}
+  PLATFORM_URL: ${PLATFORM_URL:-https://platform.shnea.kr}
+  PLATFORM_API_KEY: ${PLATFORM_API_KEY:-}
+  PLATFORM_PROJECT_ID: ${PLATFORM_PROJECT_ID:-}
+  PLATFORM_ENVIRONMENT_ID: ${PLATFORM_ENVIRONMENT_ID:-}
+  ADS_PROVIDER: ${ADS_PROVIDER:-adsense}
+  ADS_ENABLED: ${ADS_ENABLED:-${ADSENSE_ENABLED:-false}}
+  ADS_SHOW_PLACEHOLDERS: ${ADS_SHOW_PLACEHOLDERS:-${ADSENSE_SHOW_PLACEHOLDERS:-false}}
+  ADSENSE_CLIENT_ID: ${ADSENSE_CLIENT_ID:-}
+  ADSENSE_POST_SLOT: ${ADSENSE_POST_SLOT:-}
+  ADSENSE_SIDEBAR_SLOT: ${ADSENSE_SIDEBAR_SLOT:-}
+  ADSENSE_INLINE_SLOT: ${ADSENSE_INLINE_SLOT:-}
+
+services:
+  db:
+    logging: *logging
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ggeujeok}
+      POSTGRES_USER: ${POSTGRES_USER:-ggeujeok}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+  migrate:
+    logging: *logging
+    image: ${IMAGE_PREFIX:?IMAGE_PREFIX required}-api:${IMAGE_TAG:?IMAGE_TAG required}
+    environment: *api-environment
+    command: [node, apps/api/dist/database/migrate.js]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: 'no'
+  api:
+    logging: *logging
+    image: ${IMAGE_PREFIX:?IMAGE_PREFIX required}-api:${IMAGE_TAG:?IMAGE_TAG required}
+    environment: *api-environment
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:30101/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+  worker:
+    logging: *logging
+    image: ${IMAGE_PREFIX:?IMAGE_PREFIX required}-api:${IMAGE_TAG:?IMAGE_TAG required}
+    environment: *api-environment
+    command: [node, apps/api/dist/worker.js]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+  web:
+    logging: *logging
+    image: ${IMAGE_PREFIX:?IMAGE_PREFIX required}-web:${IMAGE_TAG:?IMAGE_TAG required}
+    environment:
+      SITE_URL: ${SITE_URL:?SITE_URL required}
+      API_INTERNAL_URL: http://api:30101
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+  nginx:
+    logging: *logging
+    image: ${IMAGE_PREFIX:?IMAGE_PREFIX required}-nginx:${IMAGE_TAG:?IMAGE_TAG required}
+    ports:
+      - '${HOST_BIND:-0.0.0.0}:${HTTP_PORT:-30145}:8080'
+    depends_on:
+      - web
+      - api
+    restart: unless-stopped
+
+volumes:
+  database:
+  uploads:

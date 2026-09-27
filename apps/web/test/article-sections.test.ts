@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import { articleSections } from '../src/lib/article-sections';
+import type { EditorDocument } from '@shnea/editor';
+const paragraph = (length: number) => ({ type: 'paragraph', content: [{ type: 'text', text: '가'.repeat(length) }] });
+const original: EditorDocument = { format: 'shnea-editor', version: 3, content: { type: 'doc', content: Array.from({length: 30}, () => paragraph(600)) } };
+const before = JSON.stringify(original);
+const sections = articleSections(original);
+assert.equal(sections.length, 3);
+assert.deepEqual(sections.flatMap(section => section.content.content!), original.content.content);
+assert.equal(JSON.stringify(original), before);
+assert.ok(sections.every(section => section.content.content!.length >= 2));
+const short: EditorDocument = {...original, content: {type:'doc',content:[paragraph(500)]}};
+assert.equal(articleSections(short).length, 1);
+const table = {type:'table',content:[{type:'tableRow',content:[{type:'tableCell',content:[paragraph(9000)]}]}]};
+const indivisible: EditorDocument = {...original,content:{type:'doc',content:[table,paragraph(2000)]}};
+assert.equal(articleSections(indivisible).length,1);
