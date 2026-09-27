@@ -72,7 +72,7 @@ export class Notifications {
     const page = pageInput.parse(input), params=[session.userId,session.isAdmin];
     const items = await this.db.query(`SELECT n.id,n.kind,n.created_at AS "createdAt",n.read_at AS "readAt",
       c.id AS "commentId",c.post_id AS "postId",left(c.content,180) AS content,
-      COALESCE(c.guest_name,u.custom_nickname,u.nickname,'회원') AS "actorName",p.title,p.slug,p.status
+      COALESCE(c.ai_identity->>'name',c.guest_name,u.custom_nickname,u.nickname,'회원') AS "actorName",p.title,p.slug,p.status
       ${joined} LEFT JOIN users u ON u.id=c.user_id WHERE ${visible}
       ORDER BY n.created_at DESC,n.id DESC LIMIT 20 OFFSET $3`, [...params,(page-1)*20]);
     const count = await this.db.query(`SELECT count(*)::int AS total,count(*) FILTER(WHERE n.read_at IS NULL)::int AS unread ${joined} WHERE ${visible}`,params);

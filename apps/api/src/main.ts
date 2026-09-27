@@ -5,6 +5,8 @@ import { json, raw } from 'express';
 import { randomUUID } from 'node:crypto';
 import { config, validateAuthConfig } from './config.js';
 import { Database, DatabaseModule } from './database/database.js';
+import { Ai } from './ai/ai.service.js';
+import { AdminAiController, AiCacheController } from './ai/ai.controller.js';
 import { Sessions } from './auth/sessions.js';
 import { AuthController } from './auth/auth.controller.js';
 import { AdminGuard, UserGuard, Errors, type AuthRequest } from './http.js';
@@ -35,8 +37,8 @@ class HealthController {
   @Get('health') async health() { await this.db.query('SELECT 1'); return { status: 'ok' }; }
 }
 
-@Module({ imports: [DatabaseModule], controllers: [HealthController, AuthController, PostsController, AdminPostsController, AdminTagsController, AdminImagesController, ImagesController, CategoriesController, ActivityController, PublicActivityController, GuestActivityController, AdminCommentsController, MeController, AdminAdSettingsController, PublicAdSettingsController, AdminSiteSettingsController, PublicSiteSettingsController, AdminVisitsController, PublicVisitsController],
-  providers: [Sessions, AdminGuard, UserGuard, Posts, Images, PlatformFiles, Categories, Activity, Captchas, Notifications, MyActivity, AdSettings, SiteSettings, Visits, { provide: OperationalLogs, useValue: logs }] })
+@Module({ imports: [DatabaseModule], controllers: [AdminAiController, AiCacheController, HealthController, AuthController, PostsController, AdminPostsController, AdminTagsController, AdminImagesController, ImagesController, CategoriesController, ActivityController, PublicActivityController, GuestActivityController, AdminCommentsController, MeController, AdminAdSettingsController, PublicAdSettingsController, AdminSiteSettingsController, PublicSiteSettingsController, AdminVisitsController, PublicVisitsController],
+  providers: [Ai, Sessions, AdminGuard, UserGuard, Posts, Images, PlatformFiles, Categories, Activity, Captchas, Notifications, MyActivity, AdSettings, SiteSettings, Visits, { provide: OperationalLogs, useValue: logs }] })
 class AppModule {}
 
 validateAuthConfig();

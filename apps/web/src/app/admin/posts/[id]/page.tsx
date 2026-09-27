@@ -1,6 +1,6 @@
 'use client';
 
-import { Eye, Pencil, Globe, Save, Download, LockKeyhole, Trash2 } from 'lucide-react';
+import { Eye, Pencil, Globe, Save, Download, LockKeyhole, Trash2, Bot } from 'lucide-react';
 
 import { use, useEffect, useMemo, useState } from 'react';
 import { ShneaEditor } from '@shnea/editor/react';
@@ -39,9 +39,16 @@ function Editor({ initial, csrf, categories }: { initial: Draft; csrf: string; c
   const [editorError, setEditorError] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [coverUploading, setCoverUploading] = useState(false);
+  const [aiBusy,setAiBusy]=useState(false),[aiMessage,setAiMessage]=useState('');
   const { data } = draft;
   const attachments = useMemo(() => editorAttachments(draft.id, csrf), [draft.id, csrf]);
   const blocked = pending || deleting;
+  async function requestSummary(){
+    setAiBusy(true);setAiMessage('');
+    try{await save();const result=await api<{state:string}>(`/api/admin/ai/posts/${draft.id}/summary`,mutation('POST',csrf));
+      setAiMessage(result.state==='SUCCEEDED'?'현재 공개본의 AI 요약이 있습니다. 다시 열면 확인할 수 있습니다.':'요약을 요청했습니다. 설정 → AI 도우미에서 처리 상태를 확인할 수 있습니다.');}
+    catch(error){setAiMessage((error as Error).message);}finally{setAiBusy(false);}
+  }
   function download() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${data.slug || 'draft'}.json`; anchor.click();
@@ -72,9 +79,9 @@ function Editor({ initial, csrf, categories }: { initial: Draft; csrf: string; c
           <option value="">카테고리 선택</option>{categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
         </select><label htmlFor="post-slug">글 주소</label><input id="post-slug" value={data.slug} maxLength={120} disabled={Boolean(draft.publishedAt)} onChange={event => change({ slug: event.target.value })} />
         <p className="field-help">영문 소문자·숫자·하이픈. 첫 공개 후에는 바꿀 수 없습니다.</p>
-        <label htmlFor="summary">요약 <span className="optional">선택</span></label><textarea id="summary" rows={5} value={data.summary} maxLength={500} onChange={event => change({ summary: event.target.value })} placeholder="이 글을 짧게 소개해 주세요" />
-        <p className="field-help">비워 두면 본문의 앞부분을 표시합니다.</p>
-        <CoverPicker content={data.content} value={data.thumbnailId || null} attachments={attachments} disabled={blocked}
+        {draft.aiGenerated&&<p className="field-help">{draft.aiIdentity?.name||'도우미'}가 작성한 AI 초안입니다. 수정·공개 후에도 AI 작성 표시를 유지합니다.</p>}<label htmlFor="summary">요약 <span className="optional">선택</span></label><textarea id="summary" rows={5} value={data.summary} maxLength={500} onChange={event => change({ summary: event.target.value })} placeholder="이 글을 짧게 소개해 주세요" />
+        <p className="field-help">직접 쓴 요약을 우선합니다. 비워 두면 AI 요약 설정에 따라 생성하며, 생성 전에는 본문 앞부분을 표시합니다.</p>
+        {draft.aiSummary&&!data.summary&&<p className="field-help"><span className="ai-badge">AI 요약</span> {draft.aiSummary}</p>}{draft.status==='PUBLIC'&&!data.summary&&<button type="button" className="secondary" disabled={blocked||aiBusy} onClick={()=>void requestSummary()}><Bot aria-hidden="true" />{aiBusy?'요청 중…':'공개본 AI 요약 요청'}</button>}{aiMessage&&<p className="field-help" role="status">{aiMessage}</p>}<CoverPicker content={data.content} value={data.thumbnailId || null} attachments={attachments} disabled={blocked}
           onChange={thumbnailId => change({ thumbnailId })} onBusy={setCoverUploading} />
         <TagInput value={data.tags} disabled={blocked} onChange={tags => change({ tags })} />
         <label className="setting-toggle"><span><strong>댓글 허용</strong><small>끄면 새 댓글·답글을 받지 않습니다. 기존 댓글은 남습니다.</small></span>

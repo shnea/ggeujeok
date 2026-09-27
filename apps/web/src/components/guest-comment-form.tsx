@@ -9,7 +9,7 @@ type Captcha = { id: string; image: string; expiresIn: number };
 export function GuestCommentForm({ postId, commentId, parentId, replyToId, initial = '', mode = 'create', login, onSaved, onCancel }: {
   postId: string; commentId?: string; initial?: string; mode?: 'create' | 'edit' | 'delete'; login: string;
   parentId?: string; replyToId?: string;
-  onSaved: () => void; onCancel?: () => void;
+  onSaved: (commentId?:string) => void; onCancel?: () => void;
 }) {
   const [name, setName] = useState(''), [password, setPassword] = useState(''), [content, setContent] = useState(initial);
   const [captcha, setCaptcha] = useState<Captcha | null>(null), [answer, setAnswer] = useState('');
@@ -44,11 +44,11 @@ export function GuestCommentForm({ postId, commentId, parentId, replyToId, initi
     setBusy(true); setMessage(''); requestId.current ||= crypto.randomUUID();
     let succeeded = false;
     try {
-      await api(`/api/guest/posts/${postId}/comments${commentId ? `/${commentId}` : ''}`, { method:mode==='create'?'POST':mode==='edit'?'PUT':'DELETE',
+      const result=await api<{id?:string}>(`/api/guest/posts/${postId}/comments${commentId ? `/${commentId}` : ''}`, { method:mode==='create'?'POST':mode==='edit'?'PUT':'DELETE',
         headers:{'Content-Type':'application/json'}, body:JSON.stringify({content,nickname:name,password,parentId,replyToId,requestId:requestId.current,captchaId:captcha.id,captchaAnswer:answer}) });
       try { sessionStorage.removeItem(key); } catch { /* No stored draft. */ }
       succeeded = true;
-      setContent(''); setPassword(''); requestId.current=''; setMessage(mode==='delete'?'댓글을 삭제했습니다.':mode==='edit'?'댓글을 수정했습니다.':'댓글을 등록했습니다.'); onSaved();
+      setContent(''); setPassword(''); requestId.current=''; setMessage(mode==='delete'?'댓글을 삭제했습니다.':mode==='edit'?'댓글을 수정했습니다.':'댓글을 등록했습니다.'); onSaved(result.id);
     } catch (error) { setMessage((error as Error).message); }
     finally { setBusy(false); if (!succeeded || (mode === 'create' && !parentId)) void refresh(); }
   }}>

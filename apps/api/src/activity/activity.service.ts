@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { Database } from '../database/database.js';
+import { enqueueAssistantReply } from '../ai/ai.service.js';
 import type { Session } from '../auth/sessions.js';
 import { Captchas } from './captcha.service.js';
 import { Notifications } from '../notifications/notifications.service.js';
@@ -15,11 +16,12 @@ const guestNicknameInput = z.string().trim().normalize('NFC').min(2).max(30).reg
 const passwordInput = z.string().min(8).max(128);
 const derive = promisify(scrypt);
 const commentFields = `c.id,c.parent_id AS "parentId",c.content,c.created_at AS "createdAt",c.updated_at AS "updatedAt",
+  (SELECT a.state FROM ai_tasks a WHERE a.comment_id=c.id) AS "aiReplyState",
   c.reply_to_id AS "replyToId",
-  (SELECT CASE WHEN target.status='DELETED' THEN '삭제된 댓글' ELSE COALESCE(target.guest_name,author.custom_nickname,author.nickname,'회원') END
+  (SELECT CASE WHEN target.status='DELETED' THEN '삭제된 댓글' ELSE COALESCE(target.ai_identity->>'name',target.guest_name,author.custom_nickname,author.nickname,'회원') END
     FROM comments target LEFT JOIN users author ON author.id=target.user_id WHERE target.id=c.reply_to_id AND target.parent_id IS NOT NULL) AS "replyToName",
-  CASE WHEN c.status='DELETED' THEN '삭제된 댓글' ELSE COALESCE(c.guest_name,u.custom_nickname,u.nickname,'회원') END AS "authorName",
-  c.status='DELETED' AS "isDeleted",c.status='VISIBLE' AND c.user_id IS NULL AS "isGuest",
+  CASE WHEN c.status='DELETED' THEN '삭제된 댓글' ELSE COALESCE(c.ai_identity->>'name',c.guest_name,u.custom_nickname,u.nickname,'회원') END AS "authorName",
+  c.status='DELETED' AS "isDeleted",c.status='VISIBLE' AND c.user_id IS NULL AND c.ai_identity IS NULL AS "isGuest",c.ai_identity AS "aiIdentity",
   COALESCE(c.user_id=$5,false) AS "isAuthor",c.status='VISIBLE' AND COALESCE(c.user_id=$2,false) AS "canEdit",
   c.status='VISIBLE' AND (COALESCE(c.user_id=$2,false) OR $3) AS "canDelete"`;
 
@@ -27,7 +29,8 @@ async function passwordHash(password: string) {
   const salt = randomBytes(16).toString('hex');
   return `${salt}:${(await derive(password,salt,32) as Buffer).toString('hex')}`;
 }
-async function matchesPassword(password: string, encoded: string) {
+async function matchesPassword(password: string, encoded: string | null) {
+  if (!encoded) return false;
   const [salt,hash] = encoded.split(':');
   return timingSafeEqual(await derive(password,salt,32) as Buffer, Buffer.from(hash,'hex'));
 }
@@ -42,7 +45,7 @@ export class Activity {
   async adminComments(queryPage: unknown, target?: string) {
     const page = pageInput.parse(queryPage);
     const items = await this.db.query(`SELECT c.id,c.content,c.post_id AS "postId",c.created_at AS "createdAt",
-      COALESCE(c.guest_name,u.custom_nickname,u.nickname,'회원') AS "authorName",c.user_id IS NULL AS "isGuest",p.title,p.status,p.slug
+      COALESCE(c.ai_identity->>'name',c.guest_name,u.custom_nickname,u.nickname,'회원') AS "authorName",c.user_id IS NULL AND c.ai_identity IS NULL AS "isGuest",c.ai_identity AS "aiIdentity",p.title,p.status,p.slug
       FROM comments c JOIN posts p ON p.id=c.post_id LEFT JOIN users u ON u.id=c.user_id WHERE c.status='VISIBLE' AND ($2::uuid IS NULL OR c.id=$2)
       ORDER BY c.created_at DESC,c.id DESC LIMIT 20 OFFSET $1`, [(page-1)*20,target ?? null]);
     return {items:items.rows,page,total:(await this.db.query("SELECT count(*)::int AS total FROM comments WHERE status='VISIBLE' AND ($1::uuid IS NULL OR id=$1)",[target ?? null])).rows[0].total};
@@ -64,7 +67,7 @@ export class Activity {
   async read(slug: string, session: Session | null, queryPage: unknown) {
     const page = pageInput.parse(queryPage);
     return this.db.transaction(async tx => {
-      const post = await tx.query("SELECT id,author_id,comments_enabled FROM posts WHERE slug=$1 AND status='PUBLIC' FOR SHARE", [slug]);
+      const post = await tx.query("SELECT id,author_id,comments_enabled,ai_generated FROM posts WHERE slug=$1 AND status='PUBLIC' FOR SHARE", [slug]);
       if (!post.rows[0]) throw new NotFoundException('글을 찾을 수 없습니다.');
       const id = post.rows[0].id;
       const comments = await tx.query(`SELECT ${commentFields},
@@ -78,7 +81,12 @@ export class Activity {
           AND (c.status='VISIBLE' OR EXISTS(SELECT 1 FROM comments r WHERE r.parent_id=c.id AND r.status='VISIBLE'))) AS "threadCount",
         (SELECT count(*)::int FROM post_likes WHERE post_id=$1) AS "likeCount",
         EXISTS(SELECT 1 FROM post_likes WHERE post_id=$1 AND user_id=$2) AS liked`, [id, session?.userId ?? null]);
-      return { ...counts.rows[0], comments: comments.rows, commentsEnabled: post.rows[0].comments_enabled, page };
+      const aiPending=(await tx.query(`SELECT EXISTS(SELECT 1 FROM ai_tasks WHERE post_id=$1
+        AND kind='comment' AND state IN ('PENDING','QUEUED','RUNNING') AND created_at>now()-interval '5 minutes') AS pending`,[id])).rows[0].pending;
+      const aiAssistant=(await tx.query(`SELECT data->>'name' AS name,data->>'mentionKeyword' AS keyword
+        FROM ai_settings WHERE singleton=true AND data->>'mentionsEnabled'='true'`)).rows[0]??null;
+      if(aiAssistant)aiAssistant.respondsToPost=post.rows[0].ai_generated;
+      return { ...counts.rows[0], comments: comments.rows, commentsEnabled: post.rows[0].comments_enabled, aiPending, aiAssistant, page };
     });
   }
 
@@ -160,6 +168,7 @@ export class Activity {
       await this.limit(tx, user, 'comment');
       await tx.query('INSERT INTO comments(id,post_id,user_id,content,request_hash,parent_id,reply_to_id) VALUES($1,$2,$3,$4,$5,$6,$7)', [requestId, post, user, content, hash,parentId ?? null,replyToId ?? null]);
       await this.notifications.enqueue(tx,requestId);
+      await enqueueAssistantReply(tx,post,requestId,content);
       return { id: requestId };
     });
   }
@@ -220,6 +229,7 @@ export class Activity {
       await this.captchas.limit(tx,client,'comment');
       await tx.query('INSERT INTO comments(id,post_id,guest_name,guest_password,content,request_hash,parent_id,reply_to_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[data.requestId,post,data.nickname,encoded,data.content,hash,data.parentId ?? null,data.replyToId ?? null]);
       await this.notifications.enqueue(tx,data.requestId);
+      await enqueueAssistantReply(tx,post,data.requestId,data.content);
       return {id:data.requestId};
     });
   }
@@ -228,7 +238,7 @@ export class Activity {
     const data = z.object({ password:passwordInput, content:remove ? z.string().optional() : contentInput.shape.content }).parse(input);
     return this.db.transaction(async tx => {
       await this.publicPost(tx,post);
-      const comment = (await tx.query("SELECT guest_password FROM comments WHERE id=$1 AND post_id=$2 AND user_id IS NULL AND status='VISIBLE' FOR UPDATE",[id,post])).rows[0];
+      const comment = (await tx.query("SELECT guest_password FROM comments WHERE id=$1 AND post_id=$2 AND user_id IS NULL AND ai_identity IS NULL AND status='VISIBLE' FOR UPDATE",[id,post])).rows[0];
       if (!comment) throw new NotFoundException('댓글을 찾을 수 없습니다.');
       if (!await matchesPassword(data.password,comment.guest_password)) throw new ForbiddenException('댓글 비밀번호가 맞지 않습니다.');
       if (remove) await this.eraseComment(tx,id);

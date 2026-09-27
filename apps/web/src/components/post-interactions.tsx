@@ -1,6 +1,6 @@
 'use client';
 
-import { Reply, Pencil, Trash2, Heart, RefreshCw, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
+import { Reply, Pencil, Trash2, Heart, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, Bot } from 'lucide-react';
 
 
 import { useEffect, useState } from 'react';
@@ -10,10 +10,10 @@ import { CommentForm } from './comment-form';
 
 type Comment = {
   id: string; parentId: string | null; content: string; authorName: string; replyToName: string | null;
-  isDeleted: boolean; isGuest: boolean; isAuthor: boolean; createdAt: string; updatedAt: string;
+  aiReplyState?: string|null; aiIdentity?: {name:string;imageUrl:string|null}|null; isDeleted: boolean; isGuest: boolean; isAuthor: boolean; createdAt: string; updatedAt: string;
   canEdit: boolean; canDelete: boolean; replyCount?: number;
 };
-type Activity = { comments: Comment[]; commentsEnabled: boolean; commentCount: number; threadCount: number; likeCount: number; liked: boolean; page: number };
+type Activity = { aiAssistant?:{name:string;keyword:string;respondsToPost?:boolean}|null; aiPending?:boolean; comments: Comment[]; commentsEnabled: boolean; commentCount: number; threadCount: number; likeCount: number; liked: boolean; page: number };
 type Replies = { items: Comment[]; total: number; page: number };
 type Action = { kind: 'reply' | 'edit' | 'delete'; comment: Comment; rootId: string };
 const date = (value: string) => new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Seoul' }).format(new Date(value));
@@ -87,6 +87,26 @@ export function PostInteractions({ postId, slug }: { postId: string; slug: strin
     return () => controller.abort();
   }, [slug, expanded, retry]);
 
+  useEffect(()=>{
+    if(!data?.aiPending)return;
+    const controller=new AbortController();let running=false;
+    const timer=setInterval(async()=>{
+      if(document.visibilityState!=='visible'||running)return;
+      running=true;
+      try{
+        const [next,nextReplies]=await Promise.all([
+          api<Activity>(`/api/public/posts/${slug}/interactions?page=${page}`,{signal:controller.signal}),
+          expanded?api<Replies>(`/api/public/posts/${slug}/comments/${expanded.id}/replies?page=${expanded.page}`,{signal:controller.signal}):Promise.resolve(null),
+        ]);
+        if(controller.signal.aborted)return;
+        setData(next);
+        if(nextReplies)setReplies(nextReplies);
+      }catch{/* Keep the current comments and typed text on a background refresh failure. */}
+      finally{running=false;}
+    },5000);
+    return()=>{clearInterval(timer);controller.abort();};
+  },[data?.aiPending,slug,page,expanded]);
+
   function chooseAction(next: Action | null) {
     setAction(next);
     try {
@@ -100,8 +120,9 @@ export function PostInteractions({ postId, slug }: { postId: string; slug: strin
     chooseAction(null); setRetry(value => value + 1);
   }
   function savedComment() { chooseAction(null); setRetry(value => value + 1); }
-  function savedRoot() {
+  function savedRoot(commentId?:string) {
     setPage(Math.max(1, Math.ceil(((data?.threadCount || 0) + 1) / 20))); savedComment();
+    if(commentId&&data?.aiAssistant)setExpanded({id:commentId,page:1});
   }
   async function write<T>(url: string, method: string, body?: unknown) {
     setBusy(true); setError('');
@@ -131,10 +152,12 @@ export function PostInteractions({ postId, slug }: { postId: string; slug: strin
     const editing = action?.comment.id === comment.id && action.kind !== 'reply';
     return <article id={`comment-${comment.id}`} className="comment-entry" tabIndex={-1}>
       {comment.isDeleted ? <p className="comment-deleted">삭제된 댓글입니다.</p> : <>
-        <div className="comment-meta"><strong>{comment.authorName}</strong>
-          <span>{comment.isGuest ? '비회원' : comment.isAuthor ? '글 작성자' : '회원'}</span><time dateTime={comment.createdAt}>{date(comment.createdAt)}</time>
+        <div className="comment-meta">{comment.aiIdentity?.imageUrl&&<img className="ai-avatar" src={comment.aiIdentity.imageUrl} alt="" referrerPolicy="no-referrer" />}<strong>{comment.authorName}</strong>
+          <span>{comment.aiIdentity ? 'AI 자동답글' : comment.isGuest ? '비회원' : comment.isAuthor ? '글 작성자' : '회원'}</span><time dateTime={comment.createdAt}>{date(comment.createdAt)}</time>
           {comment.updatedAt !== comment.createdAt && <span>수정됨</span>}</div>
         {!editing && <p className="comment-content">{comment.replyToName && <span className="comment-mention">@{comment.replyToName} </span>}{comment.content}</p>}
+        {comment.aiReplyState&&['PENDING','QUEUED','RUNNING'].includes(comment.aiReplyState)&&<p className="field-help" role="status">AI 도우미가 답변을 준비하고 있어요.</p>}
+        {comment.aiReplyState==='FAILED'&&<p className="field-help">도우미가 답변을 완료하지 못했어요. 관리자가 확인할 수 있도록 기록했습니다.</p>}
         {editing ? comment.isGuest ? <GuestCommentForm key={`${comment.id}-${action.kind}`} postId={postId} commentId={comment.id}
           initial={comment.content} mode={action.kind === 'delete' ? 'delete' : 'edit'} login={login} onCancel={() => chooseAction(null)} onSaved={savedComment} />
           : session && <CommentForm key={comment.id} storageKey={`ggeujeok-comment-edit:${comment.id}`} initial={comment.content}
@@ -165,8 +188,11 @@ export function PostInteractions({ postId, slug }: { postId: string; slug: strin
     {linkError&&<p className="notice" role="status">{linkError}</p>}
     {loading && <p role="status" className="field-help">댓글을 불러오는 중…</p>}
     {data && !data.commentsEnabled && <p className="notice" role="status">이 글은 새 댓글과 답글을 받지 않습니다.</p>}
+    {data?.commentsEnabled&&data.aiAssistant&&<p className="field-help ai-call-help"><Bot aria-hidden="true" /><span>{data.aiAssistant.respondsToPost
+      ? <>이 글에 댓글을 남기면 {data.aiAssistant.name}가 AI 답글을 준비해요.</>
+      : <><strong>{data.aiAssistant.keyword}</strong>로 부르면 {data.aiAssistant.name}가 AI 답글을 준비해요.</>} <a href="/privacy">이전 대화 참고 안내</a></span></p>}
     {data?.commentsEnabled && !action && session?.user && <CommentForm storageKey={`ggeujeok-comment:${postId}`} session={session} login={login} disabled={busy || loading || !data || !session.user.nickname}
-      onSubmit={async (content, requestId) => { await write(`${path}/comments`, 'POST', { content, requestId }); savedRoot(); }} />}
+      onSubmit={async (content, requestId) => { const result=await write<{id:string}>(`${path}/comments`, 'POST', { content, requestId }); savedRoot(result.id); }} />}
     {data?.commentsEnabled && !action && session && !session.user && <GuestCommentForm postId={postId} login={login} onSaved={savedRoot} />}
     {data && <><ul className="comment-list">{data.comments.map(comment => <li key={comment.id}>
       {renderComment(comment, comment.id)}

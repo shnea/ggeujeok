@@ -20,10 +20,10 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const url = `${siteUrl()}/posts/${post.slug}`;
   const image = post.thumbnailId ? `${siteUrl()}/api/public/posts/${post.slug}/image` : siteInfo.imageUrl || `${siteUrl()}/default-og.png`;
   return { title: post.title, description: post.summary, alternates: { canonical: url },
-    authors: [{ name: siteInfo.operator }],
+    authors: [{ name: post.aiGenerated ? `${post.aiIdentity?.name || '도우미'} (AI)` : siteInfo.operator }],
     twitter: { card: 'summary_large_image', title: post.title, description: post.summary, images: [image] },
     openGraph: { title: post.title, description: post.summary, url, type: 'article', publishedTime: post.publishedAt, modifiedTime: post.updatedAt,
-      siteName: siteInfo.name, locale: 'ko_KR', authors: [siteInfo.operator],
+      siteName: siteInfo.name, locale: 'ko_KR', authors: [post.aiGenerated ? `${post.aiIdentity?.name || '도우미'} (AI)` : siteInfo.operator],
       images: [{ url: image, alt: post.thumbnailId ? `${post.title} 대표 이미지` : siteInfo.name }] } };
 }
 export default async function PostPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -36,10 +36,11 @@ export default async function PostPage({ params }: { params: Promise<{ slug: str
   ]);
   const structured = { '@context': 'https://schema.org', '@type': 'BlogPosting', headline: post.title,
     description: post.summary, datePublished: post.publishedAt, dateModified: post.updatedAt,
-    author: { '@type': 'Person', name: siteInfo.operator, url: `${siteUrl()}/about` }, mainEntityOfPage: `${siteUrl()}/posts/${post.slug}`,
+    author: { '@type': 'Person', name: post.aiGenerated ? `${post.aiIdentity?.name || '도우미'} (AI)` : siteInfo.operator, url: `${siteUrl()}/about` }, mainEntityOfPage: `${siteUrl()}/posts/${post.slug}`,
     ...(post.thumbnailId ? { image: `${siteUrl()}/api/public/posts/${post.slug}/image` } : {}) };
   return <div className={`post-layout${ads.sidebar ? ' has-sidebar' : ''}`}><article className="article-page"><a className="back-link" href="/">모든 기록으로</a>
-    <header className="article-header"><h1>{post.title}</h1><p className="article-summary">{post.summary}</p>
+    <header className="article-header"><h1>{post.title}</h1>{post.aiGenerated&&<div className="ai-author">{post.aiIdentity?.imageUrl&&<img className="ai-avatar" src={post.aiIdentity.imageUrl} alt="" referrerPolicy="no-referrer" />}<span>{post.aiIdentity?.name||'도우미'} · AI가 작성한 글입니다.</span></div>}
+      <p className="article-summary">{post.aiSummary&&<span className="ai-badge">{post.aiSummaryIdentity?.name?`${post.aiSummaryIdentity.name} · `:''}AI 요약</span>} {post.summary}</p>
       <div className="post-meta"><a href={`/?category=${post.categorySlug}`}>{post.categoryName}</a>
         <time dateTime={post.publishedAt}>{new Intl.DateTimeFormat('ko-KR', { dateStyle: 'long', timeZone: 'Asia/Seoul' }).format(new Date(post.publishedAt))}</time></div>
     </header>{post.thumbnailId && !documentImages(post.content!).some(image => image.fileId === post.thumbnailId) &&

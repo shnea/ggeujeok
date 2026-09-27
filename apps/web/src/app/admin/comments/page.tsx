@@ -5,7 +5,7 @@ import { RefreshCw, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, mutation, type Session } from '@/lib/api';
 
-type Comment = {id:string;postId:string;content:string;authorName:string;isGuest:boolean;createdAt:string;title:string;status:string;slug:string};
+type Comment = {aiIdentity?:{name:string}|null;id:string;postId:string;content:string;authorName:string;isGuest:boolean;createdAt:string;title:string;status:string;slug:string};
 export default function CommentsPage() {
   const [session,setSession] = useState<Session|null>(null), [data,setData] = useState<{items:Comment[];total:number}|null>(null);
   const [page,setPage] = useState(1), [retry,setRetry] = useState(0), [error,setError] = useState(''), [busy,setBusy] = useState(false);
@@ -29,7 +29,7 @@ export default function CommentsPage() {
     {busy && <p role="status">처리 중…</p>}
     {data && <><p className="field-help">댓글 {data.total}개</p><ul className="comment-list">{data.items.map(comment=><li key={comment.id}>
       <a href={comment.status==='PUBLIC'?`/posts/${comment.slug}#comment-${comment.id}`:`/admin/posts/${comment.postId}`}>{comment.title}</a>
-      <div className="comment-meta"><strong>{comment.authorName}</strong><span>{comment.isGuest?'비회원':'회원'}</span><span>{comment.status==='PUBLIC'?'공개 글':'비공개 글'}</span>
+      <div className="comment-meta"><strong>{comment.authorName}</strong><span>{comment.aiIdentity?'AI 자동답글':comment.isGuest?'비회원':'회원'}</span><span>{comment.status==='PUBLIC'?'공개 글':'비공개 글'}</span>
         <time dateTime={comment.createdAt}>{new Date(comment.createdAt).toLocaleString('ko-KR')}</time></div>
       <p className="comment-content">{comment.content}</p><button className="text-button danger" disabled={busy} onClick={()=>remove(comment)}><Trash2 aria-hidden="true" />댓글 삭제</button></li>)}</ul>
       {!data.total && <p className="empty-state">등록된 댓글이 없습니다.</p>}

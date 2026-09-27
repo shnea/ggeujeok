@@ -9,7 +9,7 @@
     "start": "node dist/main.js",
     "db:migrate": "tsx src/database/migrate.ts",
     "test": "tsx --test test/*.test.ts",
-    "test:integration": "tsx --test test/*.integration.ts"
+    "test:integration": "tsx --test --test-concurrency=1 test/*.integration.ts"
   },
   "dependencies": {
     "@nestjs/common": "12.1.0",

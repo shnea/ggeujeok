@@ -1,6 +1,9 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID, createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import type { PoolClient } from 'pg';
+import { enqueuePostAi } from '../ai/ai.service.js';
+import { createDraft } from './create-draft.js';
 import { Database } from '../database/database.js';
 import { syncImageReferences } from '../files/references.js';
 import { initialPost, listInput, normalizeTag, plainText, publishInput, saveInput, tagSearchInput, validatePost, type PostData } from './post-input.js';
@@ -8,7 +11,8 @@ import { initialPost, listInput, normalizeTag, plainText, publishInput, saveInpu
 // Existing posts also get the first body image without rewriting their content.
 const thumbnailColumn = `COALESCE(p.thumbnail_id::text, NULLIF(jsonb_path_query_first(p.content,
   '$.content.** ? (@.type == "attachment" && @.attrs.kind == "image" && @.attrs.fileId != "").attrs.fileId') #>> '{}',''))`;
-const publicColumns = `p.id, p.slug, p.title, ${thumbnailColumn} AS "thumbnailId", COALESCE(NULLIF(p.summary,''),left(p.content_text,160)) AS summary,
+const publicColumns = `p.id, p.slug, p.title, ${thumbnailColumn} AS "thumbnailId", COALESCE(NULLIF(p.summary,''),CASE WHEN p.ai_summary_version=p.version THEN p.ai_summary END,left(p.content_text,160)) AS summary,
+  p.ai_summary_identity AS "aiSummaryIdentity",p.ai_generated AS "aiGenerated",p.ai_identity AS "aiIdentity",(p.summary='' AND p.ai_summary_version=p.version AND p.ai_summary IS NOT NULL) AS "aiSummary",
   p.published_at AS "publishedAt", p.updated_at AS "updatedAt", c.name AS "categoryName", c.slug AS "categorySlug",
   COALESCE((SELECT jsonb_agg(jsonb_build_object('name',t.name,'slug',t.slug) ORDER BY t.name)
     FROM post_tags pt JOIN tags t ON t.id=pt.tag_id WHERE pt.post_id=p.id),'[]') AS tags`;
@@ -112,15 +116,14 @@ export class Posts {
   async create(actor: string) {
     const id = randomUUID(), data = initialPost(`post-${id.slice(0, 8)}`);
     await this.db.transaction(async tx => {
-      await tx.query('INSERT INTO posts(id,slug,title,content,author_id) VALUES($1,$2,$3,$4,$5)', [id, data.slug, data.title, data.content, actor]);
-      await tx.query('INSERT INTO post_drafts(post_id,data,base_version) VALUES($1,$2,1)', [id, data]);
+      await createDraft(tx,id,data,actor);
       await this.audit(tx, actor, 'post.create', id);
     });
     return { id };
   }
 
   async edit(id: string) {
-    const result = await this.db.query(`SELECT p.id,p.status,p.published_at AS "publishedAt",p.version AS "postVersion",
+    const result = await this.db.query(`SELECT p.id,p.status,p.published_at AS "publishedAt",p.version AS "postVersion",p.ai_generated AS "aiGenerated",p.ai_identity AS "aiIdentity",CASE WHEN p.ai_summary_version=p.version THEN p.ai_summary END AS "aiSummary",
       d.data,d.version,d.base_version AS "baseVersion" FROM posts p JOIN post_drafts d ON d.post_id=p.id WHERE p.id=$1`, [id]);
     if (!result.rows[0]) throw new NotFoundException('글을 찾을 수 없습니다.');
     return result.rows[0];
@@ -158,7 +161,13 @@ export class Posts {
       const result = await tx.query(`UPDATE posts SET title=$2,slug=$3,summary=$4,content=$5,content_text=$6,category_id=$7,status=$8,thumbnail_id=$9,comments_enabled=$10,
         published_at=CASE WHEN $8='PUBLIC' THEN COALESCE(published_at,now()) ELSE published_at END,version=version+1,updated_at=now()
         WHERE id=$1 RETURNING version`, [id, data.title, data.slug, data.summary, data.content, text, data.categoryId, expected.status, data.thumbnailId, data.commentsEnabled]);
+      const changed = !post.published_at || !isDeepStrictEqual(post.content,data.content) || post.title !== data.title;
+      if (!changed && post.ai_summary_version === post.version) await tx.query('UPDATE posts SET ai_summary_version=version WHERE id=$1', [id]);
       await this.setTags(tx, id, data);
+      const kinds:('summary'|'tags')[]=[];
+      if(changed || post.summary || post.ai_summary_version!==post.version)kinds.push('summary');
+      if(!data.tags.length)kinds.push('tags');
+      if (expected.status === 'PUBLIC') await enqueuePostAi(tx, id, result.rows[0].version, data.summary, data.tags, true, kinds);
       await tx.query('UPDATE post_drafts SET base_version=$2,version=version+1,updated_at=now() WHERE post_id=$1', [id, result.rows[0].version]);
       await this.audit(tx, actor, expected.status === 'PUBLIC' ? 'post.publish' : 'post.private', id);
       return { slug: data.slug, status: expected.status, version: post.draft_version + 1, baseVersion: result.rows[0].version };

@@ -138,6 +138,21 @@ docker compose --env-file .env.prod up -d
 
 <a id="site-settings"></a>
 
+### n8n 연결 관리
+
+기능 정책은 [AI 도우미](content.md#automation)를 따른다. 끄적 전용 워크플로는 `scripts/n8n-workflows.mjs`에서 만들고 다음 명령으로 등록·갱신한다.
+
+```sh
+node --env-file=.env.dev scripts/provision-n8n.mjs
+```
+
+- 로컬 관리용 `N8N_MANAGEMENT_API_KEY`는 n8n 관리 API 키다. API/worker 컨테이너나 브라우저에 넣지 않는다. 기존 OpenRouter 자격증명을 참조하며 그 키를 복사하거나 변경하지 않는다.
+- 실행 환경은 `N8N_WEBHOOK_BASE_URL`, `N8N_WEBHOOK_TOKEN`, `AI_CALLBACK_TOKEN`을 API/worker에 주입한다. 웹훅 인증과 결과 보관 인증은 별도 키를 쓴다. 실제 값은 해당 환경 파일과 n8n 자격증명에만 둔다.
+- 등록 스크립트는 `output/n8n/ggeujeok-resources.json`에 기록한 끄적 리소스만 갱신한다. 기존 워크플로가 보존됐는지 비교하고, 사용자가 고른 워크플로별 모델도 유지한다. 이 로컬 관리 자료를 잃었다면 재등록 전에 기존 끄적 리소스 ID를 확인한다.
+- 개발 일반 큐와 호출 전용 큐를 분리한다. 플랫폼 키의 프로젝트·환경을 검사하며 일반 작업과 `@루미` 호출 소비자를 독립 실행한다. 이미지에 비밀값을 넣지 않는다.
+- 워크플로 실행 내용의 n8n 저장은 끈다. 무료 모델 시간 초과·형식 실패는 관리자 작업 목록에서 확인한다. 실행 결과가 불명확한 요청을 무조건 재실행하지 않는다.
+
+
 ### 사이트 정보·검색 등록·방문 분석
 
 관리자 `/admin/settings`에서 블로그 이름·기본 설명·공개 운영자명·문의 이메일·공유 이미지 HTTPS URL, Google/네이버 소유확인 토큰, GA4 측정 ID와 GTM 컨테이너 ID를 저장한다. 관리자·CSRF 검증과 `site.update` 감사 기록을 적용하며 임의 HTML·스크립트는 받지 않는다. 012 마이그레이션의 별도 설정 테이블을 사용하므로 광고 기본값 복원에 영향받지 않는다. 저장 후 새 페이지 요청에 적용하고 재배포하지 않는다.
@@ -159,7 +174,7 @@ docker compose --env-file .env.prod up -d
 | 항목 | 확인할 값 |
 | --- | --- |
 | 플랫폼·로그인 | [플랫폼 필수 입력](platform-integration.md#inputs) |
-| n8n | 미구축. 함께 구성할 워크플로·전용 엔드포인트·자격증명·AI 모델·[요약 목표 계약](content.md#automation) 검증 |
+| n8n | 개발 전용 워크플로 4개와 인증 연결 완료. 실제 생성 검증 범위·남은 항목은 [현재 상태](../STATUS.md) 참조. 운영 환경의 별도 키·큐·워크플로 검수 필요 |
 | 배포 | 서버·CPU 아키텍처·도메인/TLS 관리 방식·레지스트리 접근 |
 | 복구 | 외부 백업 저장소·자격증명 주입 방식·플랫폼 파일 백업 범위·운영 확인 경로 |
 | Google | GA 측정 ID·Search Console 확인값·AdSense 계정/광고 설정과 외부 승인 상태 |

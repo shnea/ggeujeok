@@ -56,8 +56,8 @@ export function PostFeed({ initial, query, ad }: { initial: PostList; query: str
       <button className="text-button" aria-pressed={mode === 'infinite'} onClick={() => selectMode('infinite')}><InfinityIcon aria-hidden="true" />무한 스크롤</button>
     </div></div>
     <div className="post-list">{visible.map((post, index) => <Fragment key={post.id}><article className={`post-row${post.thumbnailId ? ' has-cover' : ''}`}>
-      <div className="post-copy"><div className="post-meta"><span>{post.categoryName}</span><time dateTime={post.publishedAt}>{new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeZone: 'Asia/Seoul' }).format(new Date(post.publishedAt))}</time></div>
-        <h2><a href={`/posts/${post.slug}`}>{post.title}</a></h2><p>{post.summary}</p>
+      <div className="post-copy"><div className="post-meta"><span>{post.categoryName}</span>{post.aiGenerated&&<span className="ai-badge">AI 작성</span>}<time dateTime={post.publishedAt}>{new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeZone: 'Asia/Seoul' }).format(new Date(post.publishedAt))}</time></div>
+        <h2><a href={`/posts/${post.slug}`}>{post.title}</a></h2><p>{post.aiSummary&&<span className="ai-badge">AI 요약</span>} {post.summary}</p>
         {post.tags.length > 0 && <ul className="tags">{post.tags.map(tag => <li key={tag.slug}><a href={`/?tag=${tag.slug}`}>#{tag.name}</a></li>)}</ul>}</div>
       {post.thumbnailId && <a className="post-cover-link" href={`/posts/${post.slug}`} aria-label={`${post.title} 읽기`}><PostImage src={`/api/public/posts/${post.slug}/image`} alt="" className="post-cover" /></a>}
     </article>{index === 2 && visible.length >= 4 && ad && <FeedAd ad={ad} />}</Fragment>)}</div>

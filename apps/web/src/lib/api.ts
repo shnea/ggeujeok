@@ -15,7 +15,8 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type Session = { configured: boolean; user: { id: string; name: string; nickname?: string | null; isAdmin: boolean } | null; csrfToken: string | null };
 export type Category = { id: string; name: string; slug: string; sortOrder: number };
-export type PublicPost = { id: string; slug: string; title: string; summary: string; publishedAt: string; updatedAt: string;
+export type AiIdentity = { name: string; imageUrl: string | null };
+export type PublicPost = { aiGenerated?: boolean; aiIdentity?: AiIdentity | null; aiSummary?: boolean; aiSummaryIdentity?: AiIdentity | null; id: string; slug: string; title: string; summary: string; publishedAt: string; updatedAt: string;
   categoryName: string; categorySlug: string; thumbnailId: string | null; tags: { name: string; slug: string }[]; content?: EditorDocument };
 export type PostList = { items: PublicPost[]; total: number; page: number };
 export function mutation(method: string, csrf: string, body?: unknown): RequestInit {
