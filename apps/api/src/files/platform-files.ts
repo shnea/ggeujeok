@@ -1,5 +1,6 @@
 import { Injectable, ServiceUnavailableException, BadGatewayException } from '@nestjs/common';
 import { config } from '../config.js';
+import { logs } from '../operations/logs.js';
 
 export type PlatformUpload = { uploadId: string; state: string; size: number; receivedBytes: number; maxChunkBytes: number; fileId: string | null };
 export type PlatformFile = { fileId: string; size: number; sha256: string; visibility: string; retentionCode: string };
@@ -8,7 +9,7 @@ export type PlatformFile = { fileId: string; size: number; sha256: string; visib
 export class PlatformFiles {
   private checkedUntil = 0;
 
-  async request(path: string, init: RequestInit = {}) {
+  async request(path: string, init: RequestInit = {}, allowMissing = false) {
     if (!config.PLATFORM_API_KEY) throw new ServiceUnavailableException('플랫폼 파일 연결 설정이 필요합니다.');
     const base = new URL(config.PLATFORM_URL);
     if (base.protocol !== 'https:' || base.pathname !== '/' || base.search || base.hash || base.username || base.password) {
@@ -18,13 +19,23 @@ export class PlatformFiles {
     try {
       response = await fetch(new URL(path, base), { ...init, redirect: 'error', signal: init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
         headers: { ...init.headers, 'X-Platform-Key': config.PLATFORM_API_KEY } });
-    } catch { throw new BadGatewayException('파일 서버에 연결하지 못했습니다. 다시 시도하면 이어서 전송합니다.'); }
+    } catch {
+      logs.write('platform.files.failed', { component: 'files' });
+      throw new BadGatewayException('파일 서버에 연결하지 못했습니다. 다시 시도하면 이어서 전송합니다.');
+    }
+    if (allowMissing && response.status === 404) return response;
     if (!response.ok) {
+      logs.write('platform.files.failed', { component: 'files', status: response.status, platformRequestId: response.headers.get('X-Request-ID') || undefined });
       await response.body?.cancel();
       if (response.status === 401 || response.status === 403) throw new ServiceUnavailableException('플랫폼 키의 파일 읽기·업로드 권한을 확인해 주세요.');
       throw new BadGatewayException(`파일 서버 요청을 처리하지 못했습니다(${response.status}). 다시 시도해 주세요.`);
     }
     return response;
+  }
+
+  async remove(path: string) {
+    const response = await this.request(path, { method: 'DELETE', signal: AbortSignal.timeout(5000) }, true);
+    await response.body?.cancel();
   }
 
   async json<T>(path: string, method = 'GET', body?: unknown): Promise<T> {

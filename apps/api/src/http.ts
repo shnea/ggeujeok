@@ -4,6 +4,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { ZodError } from 'zod';
 import { siteOrigin } from './config.js';
 import { Sessions, type Session } from './auth/sessions.js';
+import { logs } from './operations/logs.js';
 
 export type AuthRequest = Request & { session?: Session; requestId: string };
 
@@ -62,7 +63,7 @@ export class Errors implements ExceptionFilter {
       status = 409; code = 'REFERENCED'; detail = '연결된 항목을 확인한 뒤 다시 시도해 주세요.';
     }
     const requestId = request.requestId || randomUUID();
-    if (status === 500) console.error(JSON.stringify({ level: 'ERROR', requestId, code: (error as { code?: string })?.code || 'UNKNOWN' }));
+    if (status >= 500) logs.write('request.failed', { requestId, status, component: 'api' });
     const retryAfter = error instanceof HttpException && status === 429
       ? (error.getResponse() as { retryAfterSeconds?: number }).retryAfterSeconds : undefined;
     if (retryAfter) response.setHeader('Retry-After', String(retryAfter));

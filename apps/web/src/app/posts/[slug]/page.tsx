@@ -44,7 +44,7 @@ export default async function PostPage({ params }: { params: Promise<{ slug: str
         <time dateTime={post.publishedAt}>{new Intl.DateTimeFormat('ko-KR', { dateStyle: 'long', timeZone: 'Asia/Seoul' }).format(new Date(post.publishedAt))}</time></div>
     </header>{post.thumbnailId && !documentImages(post.content!).some(image => image.fileId === post.thumbnailId) &&
       <PostImage src={`/api/public/posts/${post.slug}/image`} alt={`${post.title} 대표 이미지`} className="article-cover" eager />}
-    <div className="article-body"><DocumentViewer content={post.content} inlineAd={ads.inline ?? undefined} /></div>
+    <div className="article-body"><DocumentViewer content={post.content} inlineAd={ads.inline ?? undefined} postId={post.id} /></div>
     <ul className="tags">{post.tags.map(tag => <li key={tag.slug}><a href={`/?tag=${tag.slug}`}>#{tag.name}</a></li>)}</ul>
     {ads.post && <PostAd {...ads.post} />}
     {(neighbors.previous || neighbors.next) && <nav className="post-neighbors" aria-label="이전 다음 글">

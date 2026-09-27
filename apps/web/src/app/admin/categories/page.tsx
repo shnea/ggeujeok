@@ -82,7 +82,7 @@ export default function CategoriesPage() {
     <p>관리자 계정으로 로그인해 주세요.</p>{error && <p role="alert">{error}</p>}<a className="button" href="/login"><LogIn aria-hidden="true" />로그인 화면으로</a></section>;
 
   return <section className="admin-page">
-    <nav className="admin-nav" aria-label="관리 메뉴"><a href="/admin">글 관리</a><a href="/admin/categories" aria-current="page">카테고리</a><a href="/admin/settings">설정</a></nav>
+    <nav className="admin-nav" aria-label="관리 메뉴"><a href="/admin">글 관리</a><a href="/admin/categories" aria-current="page">카테고리</a><a href="/admin/statistics">방문 통계</a><a href="/admin/settings">설정</a></nav>
     <div className="page-heading"><div><h1>카테고리 관리</h1><p>글을 묶는 이름과 표시 순서를 관리합니다.</p></div></div>
     <form ref={form} className={styles.form} onSubmit={save} aria-labelledby="category-form-title">
       <h2 id="category-form-title">{editing ? '카테고리 수정' : '카테고리 추가'}</h2>

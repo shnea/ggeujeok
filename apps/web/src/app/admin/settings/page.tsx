@@ -40,7 +40,7 @@ export default function AdSettingsPage() {
   }
   const dirty = saved && (JSON.stringify(feed) !== JSON.stringify(saved.feed || emptyFeed) || provider !== saved.provider || JSON.stringify(adfit) !== JSON.stringify(saved.adfit || emptyAdfit) || enabled !== saved.enabled || placeholders !== saved.showPlaceholders || JSON.stringify(adsense) !== JSON.stringify(saved.adsense));
   return <section className="admin-page">
-    <nav className="admin-nav" aria-label="관리 메뉴"><a href="/admin">글 관리</a><a href="/admin/categories">카테고리</a><a href="/admin/comments">댓글 관리</a><a href="/admin/settings" aria-current="page">설정</a></nav>
+    <nav className="admin-nav" aria-label="관리 메뉴"><a href="/admin">글 관리</a><a href="/admin/categories">카테고리</a><a href="/admin/comments">댓글 관리</a><a href="/admin/statistics">방문 통계</a><a href="/admin/settings" aria-current="page">설정</a></nav>
     <div className="page-heading"><div><h1>사이트 설정</h1><p>블로그 정보, 검색 등록, 방문 분석과 광고를 관리합니다.</p></div></div>
     {session?.user?.isAdmin && !denied && <><nav className="settings-sections" aria-label="설정 항목"><a href="#site-settings">기본 정보·검색·분석</a><a href="#ad-settings">광고</a></nav><SiteSettingsForm session={session} /></>}
     {loading ? <p role="status">설정을 불러오는 중…</p> : denied ? <div className="empty-state"><p>관리자 계정으로 로그인해 주세요.</p>

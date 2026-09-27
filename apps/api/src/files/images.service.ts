@@ -19,7 +19,7 @@ export const uploadInput = z.object({ requestId: z.uuid(), name: z.string().trim
   size: z.number().int().min(1).max(20 * 1024 * 1024), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 type Upload = { id: string; post_id: string | null; owner_id: string; project_id: string; environment_id: string;
   credential_hash: string; original_name: string; size: number; sha256: string; received: number;
-  media_type: string | null; file_id: string | null };
+  media_type: string | null; file_id: string | null; deleting_at?: Date | null };
 const digest = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
 
 @Injectable()
@@ -46,6 +46,7 @@ export class Images {
   private async owned(tx: PoolClient, id: string, ownerId: string) {
     const result = await tx.query<Upload>('SELECT * FROM image_uploads WHERE id=$1 AND owner_id=$2 FOR UPDATE', [id, ownerId]);
     const row = result.rows[0];
+    if (row?.deleting_at) throw new ConflictException('보존 기간이 지난 이미지입니다. 새로 추가해 주세요.');
     if (!row?.post_id || row.project_id !== config.PLATFORM_PROJECT_ID || row.environment_id !== config.PLATFORM_ENVIRONMENT_ID) throw new NotFoundException();
     if (!row.file_id && row.credential_hash !== digest(config.PLATFORM_API_KEY)) throw new ConflictException('플랫폼 키가 바뀌었습니다. 이미지 블록을 제거하고 새로 추가해 주세요.');
     return row;
@@ -126,7 +127,7 @@ export class Images {
   }
 
   async accessible(fileId: string, session: Session | null) {
-    const result = await this.db.query<Upload>(`SELECT u.* FROM image_uploads u WHERE u.file_id=$1 AND u.project_id=$2 AND u.environment_id=$3
+    const result = await this.db.query<Upload>(`SELECT u.* FROM image_uploads u WHERE u.file_id=$1 AND u.project_id=$2 AND u.environment_id=$3 AND u.deleting_at IS NULL
       AND ((u.owner_id=$4 AND $5::boolean AND u.post_id IS NOT NULL) OR EXISTS(
         SELECT 1 FROM post_file_refs r JOIN posts p ON p.id=r.post_id WHERE r.file_id=u.file_id AND r.source='PUBLISHED' AND p.status='PUBLIC'))`,
     [fileId, config.PLATFORM_PROJECT_ID, config.PLATFORM_ENVIRONMENT_ID, session?.userId || null, session?.isAdmin || false]);

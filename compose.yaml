@@ -78,6 +78,8 @@ services:
     image: ${IMAGE_PREFIX:?IMAGE_PREFIX required}-api:${IMAGE_TAG:?IMAGE_TAG required}
     environment: *api-environment
     command: [node, apps/api/dist/worker.js]
+    volumes:
+      - uploads:/app/uploads
     depends_on:
       migrate:
         condition: service_completed_successfully

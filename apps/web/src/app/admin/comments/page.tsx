@@ -23,7 +23,7 @@ export default function CommentsPage() {
     try {await api(`/api/posts/${comment.postId}/comments/${comment.id}`,mutation('DELETE',session!.csrfToken!));setRetry(value=>value+1);}
     catch(error){setError((error as Error).message);setBusy(false);}
   }
-  return <section className="admin-page"><nav className="admin-nav" aria-label="관리 메뉴"><a href="/admin">글 관리</a><a href="/admin/categories">카테고리</a><a href="/admin/comments" aria-current="page">댓글 관리</a><a href="/admin/settings">설정</a></nav>
+  return <section className="admin-page"><nav className="admin-nav" aria-label="관리 메뉴"><a href="/admin">글 관리</a><a href="/admin/categories">카테고리</a><a href="/admin/comments" aria-current="page">댓글 관리</a><a href="/admin/statistics">방문 통계</a><a href="/admin/settings">설정</a></nav>
     <h1>댓글 관리</h1><p className="field-help">공개·비공개 글의 회원·비회원 댓글을 확인하고 삭제합니다. <a href="/admin/comments">전체 댓글 보기</a></p>
     {error && <div className="notice error" role="alert"><p>{error}</p><button className="text-button" disabled={busy} onClick={()=>setRetry(value=>value+1)}><RefreshCw aria-hidden="true" />다시 불러오기</button></div>}
     {busy && <p role="status">처리 중…</p>}

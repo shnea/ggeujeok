@@ -25,6 +25,9 @@ import { SiteSettings } from './settings/site.service.js';
 import { AdminSiteSettingsController, PublicSiteSettingsController } from './settings/site.controller.js';
 import { AdminAdSettingsController, PublicAdSettingsController } from './settings/ads.controller.js';
 import { MeController } from './me/me.controller.js';
+import { Visits } from './statistics/visits.service.js';
+import { AdminVisitsController, PublicVisitsController } from './statistics/visits.controller.js';
+import { logs, OperationalLogs, requestContext } from './operations/logs.js';
 
 @Controller('api')
 class HealthController {
@@ -32,8 +35,8 @@ class HealthController {
   @Get('health') async health() { await this.db.query('SELECT 1'); return { status: 'ok' }; }
 }
 
-@Module({ imports: [DatabaseModule], controllers: [HealthController, AuthController, PostsController, AdminPostsController, AdminTagsController, AdminImagesController, ImagesController, CategoriesController, ActivityController, PublicActivityController, GuestActivityController, AdminCommentsController, MeController, AdminAdSettingsController, PublicAdSettingsController, AdminSiteSettingsController, PublicSiteSettingsController],
-  providers: [Sessions, AdminGuard, UserGuard, Posts, Images, PlatformFiles, Categories, Activity, Captchas, Notifications, MyActivity, AdSettings, SiteSettings] })
+@Module({ imports: [DatabaseModule], controllers: [HealthController, AuthController, PostsController, AdminPostsController, AdminTagsController, AdminImagesController, ImagesController, CategoriesController, ActivityController, PublicActivityController, GuestActivityController, AdminCommentsController, MeController, AdminAdSettingsController, PublicAdSettingsController, AdminSiteSettingsController, PublicSiteSettingsController, AdminVisitsController, PublicVisitsController],
+  providers: [Sessions, AdminGuard, UserGuard, Posts, Images, PlatformFiles, Categories, Activity, Captchas, Notifications, MyActivity, AdSettings, SiteSettings, Visits, { provide: OperationalLogs, useValue: logs }] })
 class AppModule {}
 
 validateAuthConfig();
@@ -43,10 +46,12 @@ app.use((request: AuthRequest, response: import('express').Response, next: () =>
   response.setHeader('X-Request-Id', request.requestId);
   response.setHeader('Cache-Control', 'no-store');
   response.setHeader('X-Content-Type-Options', 'nosniff');
-  next();
+  requestContext.run({ requestId: request.requestId }, next);
 });
 app.use('/api/admin/uploads', raw({ type: 'application/octet-stream', limit: '4mb' }));
 app.use(json({ limit: '2200kb' }));
 app.useGlobalFilters(new Errors());
 app.enableShutdownHooks();
 await app.listen(config.PORT, '0.0.0.0');
+logs.start();
+logs.write('service.started', { component: 'api' });

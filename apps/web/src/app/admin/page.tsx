@@ -27,7 +27,7 @@ export default function AdminPage() {
   if (loading) return <p className="loading" role="status">글 관리 화면을 불러오는 중…</p>;
   if (!session?.user?.isAdmin) return <section className="message-page"><h1>글 관리</h1><p>{session?.user ? '지정된 관리자만 글을 관리할 수 있습니다.' : '글을 작성하려면 관리자 계정으로 로그인해 주세요.'}</p>
     {error && <p role="alert">{error}</p>}<a className="button" href="/login"><LogIn aria-hidden="true" />로그인 화면으로</a></section>;
-  return <section className="admin-page"><nav className="admin-nav" aria-label="관리 메뉴"><a href="/admin" aria-current="page">글 관리</a><a href="/admin/categories">카테고리</a><a href="/admin/comments">댓글 관리</a><a href="/admin/settings">설정</a></nav>
+  return <section className="admin-page"><nav className="admin-nav" aria-label="관리 메뉴"><a href="/admin" aria-current="page">글 관리</a><a href="/admin/categories">카테고리</a><a href="/admin/comments">댓글 관리</a><a href="/admin/statistics">방문 통계</a><a href="/admin/settings">설정</a></nav>
     <div className="page-heading"><div><h1>글 관리</h1><p>초안과 공개 글을 관리합니다.</p></div><button disabled={creating} onClick={create}><Plus aria-hidden="true" />{creating ? '만드는 중…' : '새 글 쓰기'}</button></div>
     {error && <p className="notice error" role="alert">{error}</p>}
     {!posts.length ? <div className="empty-state"><h2>아직 작성한 글이 없습니다.</h2></div>
