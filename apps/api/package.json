@@ -15,7 +15,7 @@
     "@nestjs/common": "12.1.0",
     "@nestjs/core": "12.1.0",
     "@nestjs/platform-express": "12.1.0",
-    "@shnea/editor": "file:../../vendor/shnea-editor-0.1.0-alpha.9.tgz",
+    "@shnea/editor": "file:../../vendor/shnea-editor-0.1.0-alpha.10.tgz",
     "openid-client": "6.8.8",
     "pg": "8.23.0",
     "reflect-metadata": "0.2.2",
