@@ -2,9 +2,6 @@ node_modules/
 .next/
 dist/
 .env
-.env.dev
-.env.build
-.env.prod
 .env.test
 .idea/
 .DS_Store
@@ -14,3 +11,9 @@ output/
 coverage/
 *.tsbuildinfo
 *.log
+.env.keys
+.env.local
+.env.*.local
+.secrets/
+.tools/
+.deploy/

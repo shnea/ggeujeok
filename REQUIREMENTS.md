@@ -6,7 +6,7 @@
 
 **끄적**은 `https://shnea.kr`에서 운영할 작성자 한 명의 개인 블로그다. 기록의 장기 보관, 콘텐츠 탐색과 검색 유입, 광고 수익, n8n을 통한 작성 자동화를 목표로 한다.
 
-프로젝트 저장소: [shnea/ggeujeok](http://git.shnea.kr/shnea/ggeujeok.git). 로컬 Git 연결·원격 상태는 [STATUS.md](STATUS.md)에서 관리한다.
+프로젝트 저장소: [shnea/ggeujeok](https://github.com/shnea/ggeujeok). 로컬 Git 연결·원격 상태는 [STATUS.md](STATUS.md)에서 관리한다.
 
 - 작성자/관리자: 글과 분류·댓글을 관리하고 운영 상태·통계를 확인한다.
 - 비로그인 방문자: 공개 글을 읽고 목록·분류·검색·RSS로 탐색한다.
@@ -49,3 +49,7 @@
 - 공통 플랫폼의 외부 계약은 [플랫폼 자료 색인](docs/platform-integration.md), 내부 책임 분담은 해당 기능 문서를 따른다.
 
 문서 정리·설계 확정은 애플리케이션 코딩 착수 지시를 대신하지 않는다.
+
+## 배포 기준
+
+Docker 개발·릴리스·운영 배포는 공통 배포 표준을 따른다. dev/prod 암호화 환경과 dev/release/deploy, SHA 12자리 이미지, GitHub push 자동 배포를 사용한다. 세부 사용법은 [운영: 배포](docs/operations.md#deployment)를 따른다. DB 복구 훈련·Registry 정리 도입은 이번 전환 범위에 포함하지 않는다.

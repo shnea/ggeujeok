@@ -57,7 +57,7 @@
 | 대표 이미지·공유 이미지 | [참조 검증](apps/api/src/files/references.ts), [대표 이미지 선택](apps/web/src/app/admin/posts/[id]/cover-picker.tsx), [공개 상세](apps/web/src/app/posts/[slug]/page.tsx) | 아래 통합 테스트, `npm run test --workspace @ggeujeok/web` |
 | DB·마이그레이션 | [DB 연결](apps/api/src/database/), [마이그레이션](apps/api/migrations/) | 아래 통합 테스트 |
 | AI 도우미·호출·기억·n8n | [AI 처리](apps/api/src/ai/), [설정 화면](apps/web/src/app/admin/settings/ai-settings-form.tsx), [워크플로](scripts/n8n-workflows.mjs) | `npm test`, 아래 통합 테스트, [연결 관리](docs/operations.md#deployment) |
-| 환경·Docker | [실행](compose.yaml), [빌드](compose.build.yaml), [이미지](docker/) | [실행 절차](docs/operations.md#deployment) |
+| 환경·Docker | [실행](compose.yaml), [개발](compose.dev.yaml), [이미지](docker/) | [실행 절차](docs/operations.md#deployment) |
 | 방문 통계·운영 로그·파일 정리 | [통계](apps/api/src/statistics/), [로그](apps/api/src/operations/), [정리](apps/api/src/files/cleanup.ts), [워커](apps/api/src/worker.ts) | `npm test`, 아래 통합 테스트 |
 | DB 백업·격리 복원 | [백업](scripts/backup-db.sh), [복원 점검](scripts/check-db-restore.sh) | [백업 절차](docs/operations.md#deployment) |
 | 개인 닉네임·광고 설정 | [내 설정 API](apps/api/src/me/), [광고 설정 API](apps/api/src/settings/), [내 설정](apps/web/src/app/me/settings/), [관리자 설정](apps/web/src/app/admin/settings/) | 아래 통합 테스트, `npm run test --workspace @ggeujeok/web`, 실제 도메인 검수 |

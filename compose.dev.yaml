@@ -1,0 +1,29 @@
+services:
+  db:
+    volumes:
+      - database:/var/lib/postgresql/data
+  migrate:
+    image: ${IMAGE_NAME:-ggeujeok}-api:dev
+  api:
+    image: ${IMAGE_NAME:-ggeujeok}-api:dev
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+      target: development
+    volumes:
+      - uploads:/app/uploads
+  worker:
+    image: ${IMAGE_NAME:-ggeujeok}-api:dev
+    profiles: [worker]
+    volumes:
+      - uploads:/app/uploads
+  web:
+    image: ${IMAGE_NAME:-ggeujeok}-web:dev
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      target: development
+  nginx:
+    image: ${IMAGE_NAME:-ggeujeok}-nginx:dev
+    build:
+      context: docker/nginx

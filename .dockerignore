@@ -9,3 +9,6 @@ output
 .playwright-cli
 .impeccable
 *.log
+.tools
+.deploy
+.secrets

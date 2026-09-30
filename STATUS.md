@@ -2,10 +2,12 @@
 
 - 현재 운영 이미지: `20260929-editor-alpha11`. 사용자가 운영 pull·반영 완료를 확인했다.
 - 단계: 운영 전환 완료. 공개 주소는 `https://shnea.kr`, 외부 NPM → 운영 NAS의 30145 포트다. 사용자가 접속 정상 확인.
-- 운영 파일: `/volume1/docker/prod/ggeujeok/{compose.yaml,.env.prod}`. 데이터: `/volume2/homes/ggeujeok/{db,uploads}`. 실제 값·백업·실행 자료는 Git 제외.
+- 운영 파일: `${NAS_DEPLOY_PATH}/{compose.yaml,.env.prod}`. 데이터: `${DATA_ROOT}/{db,uploads}`. 실제 값·백업·실행 자료는 Git 제외.
 - 범위: [요구사항 목차](REQUIREMENTS.md). 완료 상세: [이력](docs/history.md).
 
 ## 진행 중
+
+공통 배포 표준 전환 중. 환경 암호화와 개발·릴리스·배포 스크립트 검증, NAS 운영 설정 전환, 전용 Runner 온라인 등록·제한 SSH 명령 검증을 마쳤다. 기존 운영 컨테이너는 유지 중이며 첫 GitHub 자동 배포는 아직 미완료다. 기존 데이터와 서비스 설정을 보존한다. 운영 문서·HTML에 환경값 조회·변경·복호화·재암호화 절차를 추가했고 Dotenvx 2.24.0의 임시 예제로 명령을 확인했다.
 
 에디터 alpha.11 운영 반영 완료. 실제 편집·저장·Viewer 이미지 동작의 상세 검수 결과는 별도 확인 대상이다. 로컬은 `http://localhost:30145`에서 실행하며 플랫폼·OIDC·n8n 실연동과 worker는 보류.
 
@@ -19,5 +21,7 @@
 - 일반 첨부는 보류. [본문 서버 렌더링](docs/content.md#public)은 플랫폼 지원 이후 진행.
 
 ## 다음 행동
+
+공통 배포 전환: 개발 Compose 해석·이미지 3개 빌드·마이그레이션·DB/API/Web/Nginx healthy 확인, 제한 SSH 게이트웨이 검사·셸 구문·암호화 검사 통과. 개발 실행은 `./scripts/dev.ps1`, 중지는 `./scripts/dev.ps1 stop`이다. GitHub 연결·NAS 적용·첫 자동 배포를 확인한 후 다음 프로젝트로 진행한다.
 
 운영에서 편집·저장·Viewer 이미지 표시의 상세 검수 결과를 확인한다. 로컬에서 필요한 기능부터 검증한다. 개발 환경의 실제 외부 연동과 운영 정기 백업은 이후 진행하며, 운영 데이터를 과거 개발 DB로 덮어쓰지 않는다.

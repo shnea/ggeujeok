@@ -55,7 +55,7 @@ services:
     restart: unless-stopped
   migrate:
     logging: *logging
-    image: ${IMAGE_PREFIX:?IMAGE_PREFIX required}-api:${IMAGE_TAG:?IMAGE_TAG required}
+    image: ${REGISTRY_HOST:-registry.shnea.kr}/${IMAGE_NAME:-ggeujeok}-api:${IMAGE_TAG:?IMAGE_TAG required}
     environment: *api-environment
     command: [node, apps/api/dist/database/migrate.js]
     depends_on:
@@ -64,7 +64,7 @@ services:
     restart: 'no'
   api:
     logging: *logging
-    image: ${IMAGE_PREFIX:?IMAGE_PREFIX required}-api:${IMAGE_TAG:?IMAGE_TAG required}
+    image: ${REGISTRY_HOST:-registry.shnea.kr}/${IMAGE_NAME:-ggeujeok}-api:${IMAGE_TAG:?IMAGE_TAG required}
     environment: *api-environment
     volumes:
       - ${UPLOAD_DATA_PATH:-uploads}:/app/uploads
@@ -79,7 +79,7 @@ services:
     restart: unless-stopped
   worker:
     logging: *logging
-    image: ${IMAGE_PREFIX:?IMAGE_PREFIX required}-api:${IMAGE_TAG:?IMAGE_TAG required}
+    image: ${REGISTRY_HOST:-registry.shnea.kr}/${IMAGE_NAME:-ggeujeok}-api:${IMAGE_TAG:?IMAGE_TAG required}
     environment: *api-environment
     command: [node, apps/api/dist/worker.js]
     volumes:
@@ -90,7 +90,7 @@ services:
     restart: unless-stopped
   web:
     logging: *logging
-    image: ${IMAGE_PREFIX:?IMAGE_PREFIX required}-web:${IMAGE_TAG:?IMAGE_TAG required}
+    image: ${REGISTRY_HOST:-registry.shnea.kr}/${IMAGE_NAME:-ggeujeok}-web:${IMAGE_TAG:?IMAGE_TAG required}
     environment:
       SITE_URL: ${SITE_URL:?SITE_URL required}
       API_INTERNAL_URL: http://api:30101
@@ -99,15 +99,27 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/robots.txt').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
   nginx:
     logging: *logging
-    image: ${IMAGE_PREFIX:?IMAGE_PREFIX required}-nginx:${IMAGE_TAG:?IMAGE_TAG required}
+    image: ${REGISTRY_HOST:-registry.shnea.kr}/${IMAGE_NAME:-ggeujeok}-nginx:${IMAGE_TAG:?IMAGE_TAG required}
     ports:
       - '${HOST_BIND:-0.0.0.0}:${HTTP_PORT:-30145}:8080'
     depends_on:
-      - web
-      - api
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, 'http://127.0.0.1:8080/api/health']
+      interval: 10s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
 
 volumes:

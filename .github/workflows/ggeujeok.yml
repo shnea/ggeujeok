@@ -1,0 +1,120 @@
+name: Ggeujeok CI and release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: [STATUS.md, docs/history.md]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ggeujeok-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check deployment configuration
+        run: |
+          python3 scripts/check-ci.py
+          python3 scripts/check-ssh-gateway.py
+          sh -n scripts/deploy.sh
+          node --check scripts/provision-n8n.mjs
+      - name: Test web
+        run: |
+          docker run --rm -v "$PWD:/workspace" -w /workspace node:24-bookworm-slim sh -ec '
+            npm ci --workspace @ggeujeok/web --include-workspace-root
+            npm run test --workspace @ggeujeok/web
+          '
+      - name: Build test API and run isolated integration tests
+        run: |
+          docker build --target development -t ggeujeok-api:dev -f docker/api.Dockerfile .
+          docker compose -f compose.test.yaml up --abort-on-container-exit --exit-code-from test
+      - name: Stop isolated tests
+        if: always()
+        run: docker compose -f compose.test.yaml down
+
+  release:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      REGISTRY_HOST: registry.shnea.kr
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Sign in to image registry when configured
+        env:
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          if [ -n "$REGISTRY_USERNAME" ] || [ -n "$REGISTRY_PASSWORD" ]; then
+            test -n "$REGISTRY_USERNAME" && test -n "$REGISTRY_PASSWORD"
+            printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" --username "$REGISTRY_USERNAME" --password-stdin
+          fi
+      - name: Build and publish three SHA images
+        shell: pwsh
+        run: ./scripts/release.ps1
+      - name: Package production configuration
+        run: python3 scripts/package-nas.py
+      - name: Save release manifest and configuration archive
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ggeujeok-release-${{ github.sha }}
+          path: |
+            output/releases/*/release.json
+            output/releases/ggeujeok-nas-config.tar.gz
+          if-no-files-found: error
+          retention-days: 90
+      - name: Sign out
+        if: always()
+        run: docker logout "$REGISTRY_HOST"
+
+  deploy:
+    needs: release
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: [self-hosted, linux, x64, ggeujeok-deploy]
+    environment: prod
+    timeout-minutes: 15
+    steps:
+      - name: Download this release configuration
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: ggeujeok-release-${{ github.sha }}
+          path: ${{ runner.temp }}/ggeujeok-release-${{ github.run_id }}
+      - name: Apply configuration and deploy the same SHA
+        env:
+          RELEASE_DIRECTORY: ${{ runner.temp }}/ggeujeok-release-${{ github.run_id }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          NAS_SSH_HOST: ${{ secrets.NAS_SSH_HOST }}
+          NAS_SSH_PORT: ${{ secrets.NAS_SSH_PORT }}
+          NAS_SSH_USER: ${{ secrets.NAS_SSH_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+          NAS_SSH_KNOWN_HOSTS: ${{ secrets.NAS_SSH_KNOWN_HOSTS }}
+          # Register the private root for log masking; the NAS fixes the deployment destination.
+          NAS_DEPLOY_PATH: ${{ secrets.NAS_DEPLOY_PATH }}
+        run: |
+          set -eu
+          test -n "$NAS_SSH_HOST" && test -n "$NAS_SSH_PORT" && test -n "$NAS_SSH_USER"
+          test -n "$NAS_SSH_KEY" && test -n "$NAS_SSH_KNOWN_HOSTS"
+          umask 077
+          key_dir=$(mktemp -d "$RUNNER_TEMP/ggeujeok-ssh.XXXXXX")
+          trap 'rm -f "$key_dir/key" "$key_dir/known_hosts"; rmdir "$key_dir"' EXIT
+          printf '%s\n' "$NAS_SSH_KEY" > "$key_dir/key"
+          printf '%s\n' "$NAS_SSH_KNOWN_HOSTS" > "$key_dir/known_hosts"
+          ssh -T -i "$key_dir/key" -p "$NAS_SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$key_dir/known_hosts" -o ConnectTimeout=20 \
+            "$NAS_SSH_USER@$NAS_SSH_HOST" "deploy $SOURCE_COMMIT" \
+            < "$RELEASE_DIRECTORY/ggeujeok-nas-config.tar.gz"
