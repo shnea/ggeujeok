@@ -1,5 +1,14 @@
 # 작업 이력
 
+## 2026-10-01 · 공통 Docker 표준·GitHub 자동 배포
+
+- 운영 Compose·개발 Compose와 기존 격리 테스트만 유지하고 별도 build Compose·build 환경을 제거했다. 기존 환경값을 보존해 `.env.dev`·`.env.prod`를 Dotenvx 2.24.0으로 암호화했다. `.env.keys`만 별도 보관하며 운영에는 PROD 키만 제공한다.
+- dev는 격리 개발 빌드·실행, release는 운영 키 없이 api/web/nginx 이미지 3개를 Git SHA 12자리로 게시, deploy는 NAS Pull·마이그레이션·실행·정상 상태 확인이다. 기존 날짜 태그와 실제 이미지 ID·이전 설정을 보존했다. Registry 정리·DB 복구 훈련은 추가하지 않았다.
+- NAS에 저장소 전용 Runner를 등록하고 GitHub Secret·제한 SSH 키를 연결했다. NAS에 없는 visudo는 기존 sudo 권한 조회로 검증하고, 등록 입력의 Windows 줄바꿈·제한 명령의 셸 인용 차이를 수정했다. 실제 SSH check 성공·임의 명령 거부와 Runner online을 확인했다. NAS가 지원하지 않는 pids 제한은 Docker가 무시하며 Runner에는 Docker 소켓·운영 데이터·키를 마운트하지 않는다.
+- 로컬 `scripts/dev.ps1 config --quiet`, 이미지 3개 빌드·DB/API/Web/Nginx healthy·마이그레이션 완료, Linux의 check-ssh-gateway.py·셸 구문, check-ci.py, n8n 관리 스크립트 구문, git diff --check를 확인했다. 환경 조회·set·decrypt --stdout·복호화/편집/재암호화는 임시 예제로 기존 키 유지까지 검사했다.
+- [GitHub 실행 36783394142](https://github.com/shnea/ggeujeok/actions/runs/36783394142)의 verify·release·deploy 모두 성공. 운영 현재 태그 `67d8fdf56588`, 직전 `20260929-editor-alpha11`, CI source SHA 일치·잠금 해제·운영 키만 존재·공개 `/api/health`와 `/` HTTP 200을 확인했다. 기존 DB·업로드 경로와 앱 설정을 유지했다. 실제 외부 계정 로그인·신규 n8n 작업의 기능 검수는 별도다.
+- NAS의 운영 문서·HTML 안내가 Git 파일과 일치함을 확인했다. 환경값 조회·변경·복호화·재암호화·반영과 실패 대응을 설명한다. 설치용 토큰·운영 키 복사본은 설치 완료 시 제거했다. 원래 운영 설정 백업은 접근이 제한된 `.deploy/migration-backup`에 보관한다.
+
 ## 2026-09-28 · ads.txt 자동 제공·운영 반영
 
 - 기존 광고 설정의 AdSense 게시자 ID에서 Google DIRECT 행을 생성하고 Nginx의 `/ads.txt`로 제공한다. 광고 비활성·다른 서비스 선택 중에도 등록한 ID를 유지하며 미설정·초기화 때는 404를 반환한다. 별도 설정 파일이나 DB 변경은 없다.
