@@ -40,7 +40,9 @@ export default async function PostPage({ params }: { params: Promise<{ slug: str
     ...(post.thumbnailId ? { image: `${siteUrl()}/api/public/posts/${post.slug}/image` } : {}) };
   return <div className={`post-layout${ads.sidebar ? ' has-sidebar' : ''}`}><article className="article-page"><a className="back-link" href="/">모든 기록으로</a>
     <header className="article-header"><h1>{post.title}</h1>{post.aiGenerated&&<div className="ai-author">{post.aiIdentity?.imageUrl&&<img className="ai-avatar" src={post.aiIdentity.imageUrl} alt="" referrerPolicy="no-referrer" />}<span>{post.aiIdentity?.name||'도우미'} · AI가 작성한 글입니다.</span></div>}
-      <p className="article-summary">{post.aiSummary&&<span className="ai-badge">{post.aiSummaryIdentity?.name?`${post.aiSummaryIdentity.name} · `:''}AI 요약</span>} {post.summary}</p>
+      <details className="article-summary"><summary>요약 보기</summary>
+        <p>{post.aiSummary&&<span className="ai-badge">{post.aiSummaryIdentity?.name?`${post.aiSummaryIdentity.name} · `:''}AI 요약</span>} {post.summary}</p>
+      </details>
       <div className="post-meta"><a href={`/?category=${post.categorySlug}`}>{post.categoryName}</a>
         <time dateTime={post.publishedAt}>{new Intl.DateTimeFormat('ko-KR', { dateStyle: 'long', timeZone: 'Asia/Seoul' }).format(new Date(post.publishedAt))}</time></div>
     </header>{post.thumbnailId && !documentImages(post.content!).some(image => image.fileId === post.thumbnailId) &&

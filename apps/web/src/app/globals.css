@@ -96,7 +96,9 @@ main { min-height: calc(100dvh - 280px); }
 .back-link:hover { text-decoration: underline; }
 .article-header { margin-block: 40px; border-bottom: 1px solid var(--line); padding-bottom: 30px; }
 .article-header h1 { font-size: clamp(30px, 4vw, 42px); }
-.article-summary { font-size: 18px; color: var(--muted); margin-block: 20px 28px; }
+.article-summary { color: var(--muted); margin-block: 20px 28px; }
+.article-summary summary { width: fit-content; cursor: pointer; font-size: 14px; }
+.article-summary p { margin: 12px 0 0; font-size: 18px; }
 .article-body { min-height: 180px; font-size: 17px; line-height: 1.9; }
 .article-body .shnea-viewer { max-width: 100%; }
 .document-surface { padding: 32px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
