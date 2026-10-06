@@ -95,11 +95,13 @@ export class AiWorker {
     if(!ready()||signal.aborted)return;
     await this.jobs.checkEnvironment();
     const task=await this.db.transaction(async tx=>{
-      const row=(await tx.query(`SELECT id FROM ai_tasks WHERE state='RUNNING' AND
+      const row=(await tx.query(`SELECT id FROM ai_tasks WHERE
+        (state='RUNNING' OR (state='FAILED' AND execution_error IS NULL
+          AND execution_started_at>now()-interval '24 hours')) AND
         (execution_started_at IS NOT NULL OR result IS NOT NULL) AND result_check_at<=now()
         ORDER BY result_check_at,id LIMIT 1 FOR UPDATE SKIP LOCKED`)).rows[0];
       if(!row)return null;
-      await tx.query("UPDATE ai_tasks SET result_check_at=now()+interval '30 seconds' WHERE id=$1",[row.id]);
+      await tx.query("UPDATE ai_tasks SET state='RUNNING',completed_at=NULL,result_check_at=now()+interval '30 seconds' WHERE id=$1",[row.id]);
       return this.ai.task(row.id,tx);
     });
     if(!task)return;

@@ -72,6 +72,9 @@ test('submission releases the queue immediately; detached collection survives ed
       await db.query('UPDATE ai_tasks SET result_check_at=now() WHERE id=$1',[task.id]);
       await new AiWorker(db).collect(new AbortController().signal);
     };
+    await db.query("UPDATE ai_tasks SET state='FAILED',execution_error='GENERATION_FAILED' WHERE id=$1",[task.id]);
+    await collect();assert.equal(reads,0,'a confirmed failure requires an explicit retry');
+    await db.query('UPDATE ai_tasks SET execution_error=NULL WHERE id=$1',[task.id]);
     await collect();assert.equal(reads,1);assert.equal((await ai.task(task.id)).state,'RUNNING');
     remote.status='succeeded';remote.result={status:'completed',result:{summary:'씨앗을 심고 싹이 자라는 과정을 기록했어.'}};
     await collect();assert.equal((await ai.task(task.id)).state,'RUNNING','a DB failure is retried by the collector');
