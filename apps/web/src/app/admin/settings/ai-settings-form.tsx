@@ -14,7 +14,7 @@ type Settings={data:Assistant;revision:number;connected:boolean};
 type Task={id:string;kind:string;state:string;errorCode:string|null;createdAt:string;postId:string|null;title:string|null};
 const kinds:Record<string,string>={summary:'요약',tags:'태그',comment:'자동 답글',article:'글 초안'};
 const states:Record<string,string>={PENDING:'접수 중',QUEUED:'대기',RUNNING:'생성 중',SUCCEEDED:'완료',SKIPPED:'건너뜀',FAILED:'확인 필요'};
-const reasons:Record<string,string>={GENERATION_FAILED:'모델 생성에 실패했습니다. 잠시 후 재시도할 수 있습니다.',CONTEXT_CHANGED:'내용이나 설정이 바뀌어 반영하지 않았습니다.',EXECUTION_UNCONFIRMED:'생성 결과를 확인하지 못했습니다. 중복 실행을 막기 위해 자동 재생성을 보류합니다.',CONNECTION_FAILED:'연결에 실패했습니다. 재시도할 수 있습니다.'};
+const reasons:Record<string,string>={GENERATION_FAILED:'AI 생성 또는 결과 형식 확인에 실패했습니다. 설정을 확인한 뒤 재시도할 수 있습니다.',CONTEXT_CHANGED:'내용이나 설정이 바뀌어 반영하지 않았습니다.',EXECUTION_UNCONFIRMED:'플랫폼 작업 상태를 확인하지 못했습니다. 재시도하면 같은 작업 ID로 결과를 다시 조회합니다.',CONNECTION_FAILED:'연결에 실패했습니다. 재시도할 수 있습니다.'};
 
 export function AiSettingsForm({session}:{session:Session}) {
   const [saved,setSaved]=useState<Settings|null>(null),[value,setValue]=useState<Assistant|null>(null);
@@ -52,7 +52,7 @@ export function AiSettingsForm({session}:{session:Session}) {
   const dirty=JSON.stringify(value)!==JSON.stringify(saved?.data);
   return <section id="ai-settings" className="ai-settings-section" aria-labelledby="ai-heading">
     <div className="ai-section-heading"><div><h2 id="ai-heading"><Bot aria-hidden="true" />AI 도우미</h2><p className="field-help">이름과 관점을 정하고, 함께할 일을 선택하세요.</p></div>
-      {saved&&<span className="field-help">{saved.connected?'서버 연결 설정됨':'n8n 연결 준비 중'}</span>}</div>
+      {saved&&<span className="field-help">{saved.connected?'서버 연결 설정됨':'플랫폼 AI 연결 준비 중'}</span>}</div>
     {loading&&<p role="status">도우미 설정을 불러오는 중…</p>}
     {value&&<form onSubmit={event=>{event.preventDefault();void save();}}>
       <fieldset className="ai-profile-fields" disabled={busy}><legend>도우미 프로필</legend>
@@ -75,7 +75,7 @@ export function AiSettingsForm({session}:{session:Session}) {
         <button type="button" className="secondary" disabled={value.images.length>=12} onClick={()=>{const id=crypto.randomUUID();change({images:[...value.images,{id,label:'',url:''}],avatarId:value.avatarId??id});}}><Plus aria-hidden="true" />이미지 추가</button>
       </fieldset>
       <fieldset disabled={busy} className="ai-work-fields"><legend>도우미가 할 일</legend>
-        {([['summaryEnabled','빈 요약 자동 채우기','글을 공개하거나 본문을 바꿀 때 생성합니다. 직접 쓴 요약은 유지합니다.'],['tagsEnabled','빈 태그 자동 채우기','태그가 없는 공개 글에만 적용합니다.'],['commentsEnabled','자동 댓글 달기','최근 7일의 미응답 댓글에 한 번만 답합니다. 보탤 내용이 없으면 건너뜁니다.']] as const).map(([key,label,help])=><label className="setting-toggle" key={key}><span><strong>{label}</strong><small>{help}</small></span><input type="checkbox" role="switch" checked={value[key]} disabled={!saved?.connected} onChange={e=>change({[key]:e.target.checked})} /></label>)}
+        {([['summaryEnabled','AI 요약 생성 허용','관리자가 글 수정 화면에서 요청할 때만 생성합니다. 직접 쓴 요약은 유지합니다.'],['tagsEnabled','AI 태그 생성 허용','관리자가 태그가 없는 편집본에서 요청할 때만 생성합니다.'],['commentsEnabled','자동 댓글 달기','최근 7일의 미응답 댓글에 한 번만 답합니다. 보탤 내용이 없으면 건너뜁니다.']] as const).map(([key,label,help])=><label className="setting-toggle" key={key}><span><strong>{label}</strong><small>{help}</small></span><input type="checkbox" role="switch" checked={value[key]} disabled={!saved?.connected} onChange={e=>change({[key]:e.target.checked})} /></label>)}
         <div className="ai-two-fields"><div><label htmlFor="ai-interval">댓글 확인 간격</label><select id="ai-interval" value={value.commentIntervalMinutes} onChange={e=>change({commentIntervalMinutes:Number(e.target.value)})}>{[30,60,180,360,720,1440].map(minutes=><option key={minutes} value={minutes}>{minutes<60?`${minutes}분`:`${minutes/60}시간`}</option>)}</select></div>
           <p className="field-help"><Clock3 aria-hidden="true" />한 번에 최대 3개. 끄면 대기 중인 답글도 게시하지 않습니다.</p></div>
       </fieldset>
@@ -102,6 +102,6 @@ export function AiSettingsForm({session}:{session:Session}) {
     </form><div className="ai-task-heading"><h3>최근 작업</h3><button className="text-button" type="button" onClick={()=>void refreshTasks()}><RefreshCw aria-hidden="true" />새로고침</button></div>
       {!tasks.length?<p className="field-help">아직 실행한 작업이 없습니다.</p>:<ul className="ai-task-list">{tasks.map(task=><li key={task.id}><div><strong>{kinds[task.kind]} · {states[task.state]}</strong><p>{task.title||'게시글 작업'}</p>{task.errorCode&&<small>{reasons[task.errorCode]||'처리 상태를 확인해 주세요.'}</small>}</div>
         {task.kind==='article'&&task.state==='SUCCEEDED'&&task.postId&&<a href={`/admin/posts/${task.postId}`}>초안 열기</a>}
-        {task.state==='FAILED'&&['CONNECTION_FAILED','GENERATION_FAILED'].includes(task.errorCode||'')&&<button className="text-button" disabled={busy} onClick={()=>void retry(task)}>재시도</button>}</li>)}</ul>}</>}
+        {task.state==='FAILED'&&['CONNECTION_FAILED','GENERATION_FAILED','EXECUTION_UNCONFIRMED'].includes(task.errorCode||'')&&<button className="text-button" disabled={busy} onClick={()=>void retry(task)}>재시도</button>}</li>)}</ul>}</>}
   </section>;
 }

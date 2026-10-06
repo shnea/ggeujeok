@@ -13,6 +13,7 @@ SHNEA Platform에서 끄적이 소비할 외부 계약의 진입점이다. 내�
 | 파일 | [파일 API 명세](https://platform.shnea.kr/integrations/file.openapi.json), [서버 예제](https://platform.shnea.kr/examples/file-client.py) | 생성·조각 업로드·재개·보기·공개 범위·보존·삭제. 타 도메인 iframe/HLS·CORS 제한 |
 | Editor/Viewer | [연동 계약](https://platform.shnea.kr/integrations/editor.md), [패키지](https://platform.shnea.kr/integrations/shnea-editor-0.1.0-alpha.11.tgz), [체크섬](https://platform.shnea.kr/integrations/checksums.json), [브라우저 예제](https://platform.shnea.kr/examples/editor/) | 현재 alpha.11·문서 version 3. 이미지 티켓·플랫폼 원점 연결 지원. 공개 npm 발행 아님. 본문 SSR 미지원은 사용자 확인 |
 | 외부 Job | [계약](https://platform.shnea.kr/integrations/jobs.md), [API 명세](https://platform.shnea.kr/integrations/jobs.openapi.json), [워커 예제](https://platform.shnea.kr/examples/jobs-client.py) | 플랫폼 큐·상태, 호스트 실행. 최소 한 번 실행·lease·중복 처리 계약 준수 |
+| AI 작업 | [계약](https://platform.shnea.kr/integrations/ai.md), [API 명세](https://platform.shnea.kr/integrations/ai.openapi.json), [서버 예제](https://platform.shnea.kr/examples/ai-client.py) | 환경별 서버 키로 `blog.summary`·`blog.tags`·`comment.generate`·`article.draft`를 접수·조회. 호스트가 결과 구조·반영 조건을 검증 |
 | 공통 로그 | [계약](https://platform.shnea.kr/integrations/logs.md), [API 명세](https://platform.shnea.kr/integrations/logs.openapi.json), [전송 예제](https://platform.shnea.kr/examples/logs-client.py) | 외부 수집·조회 제공. 환경별 한도·보존·유실 가능성 고려 |
 | 일반 알림·외부 웹훅 | [제공 상태](https://platform.shnea.kr/integrations/SERVICE_INTEGRATION.md) | 확인 시점 미제공. 임의 API 경로를 만들지 않음 |
 

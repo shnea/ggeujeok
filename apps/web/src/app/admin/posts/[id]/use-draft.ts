@@ -17,7 +17,8 @@ export function useDraft(initial: Draft, csrf: string) {
   const [tick, setTick] = useState(0);
 
   const change = useCallback((fields: Partial<DraftData>) => {
-    current.current = { ...current.current, data: { ...current.current.data, ...fields } };
+    const textChanged=fields.content!==undefined || (fields.title!==undefined && fields.title!==current.current.data.title);
+    current.current = { ...current.current, ...(textChanged?{aiSummary:null}:{}), data: { ...current.current.data, ...fields } };
     revision.current += 1;
     dirtySince.current ??= Date.now();
     setDraft(current.current);
@@ -48,6 +49,18 @@ export function useDraft(initial: Draft, csrf: string) {
     return flight.current;
   }, [csrf]);
 
+  const saveCurrent = useCallback(async () => {
+    do { await save(); } while (savedRevision.current !== revision.current);
+  }, [save]);
+
+  const reload = useCallback(async (signal?:AbortSignal) => {
+    if (revision.current !== savedRevision.current) throw new Error('변경한 내용을 먼저 저장해 주세요.');
+    const snapshotRevision=revision.current;
+    const fresh=await api<Draft>(`/api/admin/posts/${current.current.id}`,{signal});
+    if (snapshotRevision !== revision.current) throw new Error('편집 내용이 바뀌었습니다. 먼저 저장한 뒤 다시 열어 주세요.');
+    current.current=fresh;setDraft(fresh);setStatus('저장됨');
+  }, []);
+
   useEffect(() => {
     if (dirtySince.current === null || error || conflicted.current || pending) return;
     const remaining = Math.max(0, Math.min(3000, 30000 - (Date.now() - dirtySince.current)));
@@ -67,7 +80,7 @@ export function useDraft(initial: Draft, csrf: string) {
     if (pending) return;
     setPending(true); setError('');
     try {
-      do { await save(); } while (savedRevision.current !== revision.current);
+      await saveCurrent();
       const snapshot = current.current;
       const result = await api<{ version: number; baseVersion: number; status: string }>(`/api/admin/posts/${snapshot.id}/publish`,
         mutation('POST', csrf, { draftVersion: snapshot.version, baseVersion: snapshot.baseVersion, status }));
@@ -77,5 +90,5 @@ export function useDraft(initial: Draft, csrf: string) {
     finally { setPending(false); }
   }
   function allowExit() { savedRevision.current = revision.current; }
-  return { draft, change, save, publish, status, error, pending, allowExit };
+  return { draft, change, save, saveCurrent, reload, publish, status, error, pending, allowExit };
 }

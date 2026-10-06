@@ -2,7 +2,6 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { randomUUID, createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { PoolClient } from 'pg';
-import { enqueuePostAi } from '../ai/ai.service.js';
 import { createDraft } from './create-draft.js';
 import { Database } from '../database/database.js';
 import { syncImageReferences } from '../files/references.js';
@@ -123,7 +122,7 @@ export class Posts {
   }
 
   async edit(id: string) {
-    const result = await this.db.query(`SELECT p.id,p.status,p.published_at AS "publishedAt",p.version AS "postVersion",p.ai_generated AS "aiGenerated",p.ai_identity AS "aiIdentity",CASE WHEN p.ai_summary_version=p.version THEN p.ai_summary END AS "aiSummary",
+    const result = await this.db.query(`SELECT p.id,p.status,p.published_at AS "publishedAt",p.version AS "postVersion",p.ai_generated AS "aiGenerated",p.ai_identity AS "aiIdentity",CASE WHEN d.ai_summary_version=d.version THEN d.ai_summary END AS "aiSummary",
       d.data,d.version,d.base_version AS "baseVersion" FROM posts p JOIN post_drafts d ON d.post_id=p.id WHERE p.id=$1`, [id]);
     if (!result.rows[0]) throw new NotFoundException('글을 찾을 수 없습니다.');
     return result.rows[0];
@@ -136,7 +135,9 @@ export class Posts {
       const post = await tx.query('SELECT slug,published_at FROM posts WHERE id=$1 FOR UPDATE', [id]);
       if (!post.rows[0]) throw new NotFoundException();
       if (post.rows[0].published_at && post.rows[0].slug !== data.slug) throw new BadRequestException('최초 공개 후에는 주소를 바꿀 수 없습니다.');
-      const result = await tx.query(`UPDATE post_drafts SET data=$2,version=version+1,updated_at=now()
+      const result = await tx.query(`UPDATE post_drafts SET data=$2,version=version+1,updated_at=now(),
+        ai_summary_version=CASE WHEN ai_summary_version=version AND data->'content'=$2::jsonb->'content'
+          AND data->>'title'=$2::jsonb->>'title' THEN version+1 ELSE ai_summary_version END
         WHERE post_id=$1 AND version=$3 RETURNING version,base_version AS "baseVersion"`, [id, data, version]);
       if (!result.rows[0]) throw new ConflictException('다른 화면에서 편집본이 바뀌었습니다. 내용을 복사한 뒤 다시 열어 주세요.');
       await syncImageReferences(tx, id, data.content, 'DRAFT', data.thumbnailId);
@@ -147,7 +148,8 @@ export class Posts {
   async publish(id: string, input: unknown, actor: string) {
     const expected = publishInput.parse(input);
     return this.db.transaction(async tx => {
-      const locked = await tx.query(`SELECT p.*,d.data,d.version AS draft_version,d.base_version
+      const locked = await tx.query(`SELECT p.*,d.data,d.version AS draft_version,d.base_version,
+        d.ai_summary AS draft_ai_summary,d.ai_summary_version AS draft_ai_summary_version,d.ai_summary_identity AS draft_ai_summary_identity
         FROM posts p JOIN post_drafts d ON d.post_id=p.id WHERE p.id=$1 FOR UPDATE OF p,d`, [id]);
       const post = locked.rows[0];
       if (!post) throw new NotFoundException();
@@ -162,13 +164,13 @@ export class Posts {
         published_at=CASE WHEN $8='PUBLIC' THEN COALESCE(published_at,now()) ELSE published_at END,version=version+1,updated_at=now()
         WHERE id=$1 RETURNING version`, [id, data.title, data.slug, data.summary, data.content, text, data.categoryId, expected.status, data.thumbnailId, data.commentsEnabled]);
       const changed = !post.published_at || !isDeepStrictEqual(post.content,data.content) || post.title !== data.title;
-      if (!changed && post.ai_summary_version === post.version) await tx.query('UPDATE posts SET ai_summary_version=version WHERE id=$1', [id]);
+      if (!data.summary && post.draft_ai_summary && post.draft_ai_summary_version === post.draft_version)
+        await tx.query('UPDATE posts SET ai_summary=$2,ai_summary_version=version,ai_summary_identity=$3 WHERE id=$1',
+          [id,post.draft_ai_summary,post.draft_ai_summary_identity]);
+      else if (!changed && post.ai_summary_version === post.version) await tx.query('UPDATE posts SET ai_summary_version=version WHERE id=$1', [id]);
       await this.setTags(tx, id, data);
-      const kinds:('summary'|'tags')[]=[];
-      if(changed || post.summary || post.ai_summary_version!==post.version)kinds.push('summary');
-      if(!data.tags.length)kinds.push('tags');
-      if (expected.status === 'PUBLIC') await enqueuePostAi(tx, id, result.rows[0].version, data.summary, data.tags, true, kinds);
-      await tx.query('UPDATE post_drafts SET base_version=$2,version=version+1,updated_at=now() WHERE post_id=$1', [id, result.rows[0].version]);
+      await tx.query(`UPDATE post_drafts SET base_version=$2,version=version+1,updated_at=now(),
+        ai_summary_version=CASE WHEN ai_summary_version=version THEN version+1 ELSE ai_summary_version END WHERE post_id=$1`, [id, result.rows[0].version]);
       await this.audit(tx, actor, expected.status === 'PUBLIC' ? 'post.publish' : 'post.private', id);
       return { slug: data.slug, status: expected.status, version: post.draft_version + 1, baseVersion: result.rows[0].version };
     });

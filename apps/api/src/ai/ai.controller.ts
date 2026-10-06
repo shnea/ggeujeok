@@ -12,8 +12,10 @@ export class AdminAiController {
   @Get('settings') settings() { return this.ai.settings(); }
   @Put('settings') save(@Body() input:unknown,@Req() request:AuthRequest) { return this.ai.saveSettings(input,request.session!.userId!); }
   @Get('tasks') tasks() { return this.ai.list(); }
+  @Get('tasks/:id') status(@Param('id') id:string) { return this.ai.status(z.uuid().parse(id)); }
   @Post('articles') article(@Body() input:unknown,@Req() request:AuthRequest) { return this.ai.requestArticle(input,request.session!.userId!); }
   @Post('posts/:id/summary') summary(@Param('id') id:string,@Req() request:AuthRequest) { return this.ai.requestSummary(z.uuid().parse(id),request.session!.userId!); }
+  @Post('posts/:id/tags') tags(@Param('id') id:string,@Req() request:AuthRequest) { return this.ai.requestTags(z.uuid().parse(id),request.session!.userId!); }
   @Post('tasks/:id/retry') retry(@Param('id') id:string) { return this.ai.retry(z.uuid().parse(id)); }
 }
 

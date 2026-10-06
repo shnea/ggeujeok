@@ -4,20 +4,22 @@ import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { Database } from '../database/database.js';
 import { config } from '../config.js';
-import { initialPost, normalizeTag } from '../posts/post-input.js';
+import { initialPost, normalizeTag, plainText } from '../posts/post-input.js';
 import { createDraft } from '../posts/create-draft.js';
 import { Notifications } from '../notifications/notifications.service.js';
 import { assistantInput, emptyAssistant, identity, parseResult, systemPrompt, isMention, type Assistant, type TaskKind } from './assistant.js';
 
 export type AiTask = { id: string; kind: TaskKind; post_id: string | null; post_version: number | null;
   comment_id: string | null; actor_id: string | null; topic: string | null; profile: Assistant;
-  priority: boolean; settings_revision: number; state: string; job_id: string | null; input_hash: string | null; result: any };
+  priority: boolean; settings_revision: number; state: string; job_id: string | null; ai_job_id: string | null;
+  ai_request_id: string; dispatch_id: string; execution_started_at: Date | null;
+  input_hash: string | null; result: any };
 export const inputHash = (value: unknown) => {
   const { recentResponses: _style, ...context } = value as Record<string, unknown>;
   const stable = (item: any): any => item instanceof Date ? item.toJSON() : Array.isArray(item) ? item.map(stable) : item && typeof item === 'object' ? Object.fromEntries(Object.keys(item).sort().map(key => [key, stable(item[key])])) : item;
   return createHash('sha256').update(JSON.stringify(stable(context))).digest('hex');
 };
-const ready = () => Boolean(config.N8N_WEBHOOK_BASE_URL && config.N8N_WEBHOOK_TOKEN && config.AI_CALLBACK_TOKEN);
+const ready = () => Boolean(config.PLATFORM_API_KEY && config.PLATFORM_PROJECT_ID && config.PLATFORM_ENVIRONMENT_ID);
 
 export async function enqueueAssistantReply(tx:PoolClient,postId:string,commentId:string,content:string) {
   if (!ready()) return;
@@ -29,17 +31,6 @@ export async function enqueueAssistantReply(tx:PoolClient,postId:string,commentI
     WHERE p.id=$1 AND p.status='PUBLIC' AND p.comments_enabled AND c.status='VISIBLE' AND c.ai_identity IS NULL
       AND (target.ai_identity IS NOT NULL OR $5)
     ON CONFLICT DO NOTHING`,[postId,commentId,settings.data,settings.revision,isMention(content,settings.data.mentionKeyword)]);
-}
-
-// Called inside publication's transaction: publishing never waits for an external AI service.
-export async function enqueuePostAi(tx: PoolClient, postId: string, version: number, summary: string, tags: string[], changed: boolean, kinds:('summary'|'tags')[]=['summary','tags']) {
-  const settings = (await tx.query('SELECT data,revision FROM ai_settings WHERE singleton=true')).rows[0];
-  if (!settings || !changed) return;
-  for (const kind of kinds) {
-    if (kind === 'summary' ? summary || !settings.data.summaryEnabled : tags.length || !settings.data.tagsEnabled) continue;
-    await tx.query(`INSERT INTO ai_tasks(kind,post_id,post_version,profile,settings_revision)
-      VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, [kind,postId,version,settings.data,settings.revision]);
-  }
 }
 
 @Injectable()
@@ -58,7 +49,7 @@ export class Ai {
       const row = (await tx.query('SELECT revision FROM ai_settings WHERE singleton=true FOR UPDATE')).rows[0];
       if ((row?.revision ?? 0) !== revision) throw new ConflictException('다른 화면에서 설정이 바뀌었습니다. 다시 불러와 주세요.');
       if (!ready() && (data.summaryEnabled || data.tagsEnabled || data.commentsEnabled || data.mentionsEnabled))
-        throw new BadRequestException('n8n 연결을 먼저 준비해 주세요. 도우미 정보는 기능을 끈 상태로 저장할 수 있습니다.');
+        throw new BadRequestException('플랫폼 AI 연결을 먼저 준비해 주세요. 도우미 정보는 기능을 끈 상태로 저장할 수 있습니다.');
       await tx.query(`INSERT INTO ai_settings(singleton,data) VALUES(true,$1)
         ON CONFLICT(singleton) DO UPDATE SET data=$1,revision=ai_settings.revision+1,next_comment_at=now()`, [data]);
       await tx.query("INSERT INTO audit_events(actor_id,action) VALUES($1,'ai.settings.update')", [actor]);
@@ -72,18 +63,33 @@ export class Ai {
       FROM ai_tasks a LEFT JOIN posts p ON p.id=a.post_id ORDER BY a.created_at DESC LIMIT 30`)).rows;
   }
 
-  async requestSummary(postId:string,actor:string) {
+  async status(id:string) {
+    const row=(await this.db.query('SELECT id,state,error_code AS "errorCode" FROM ai_tasks WHERE id=$1',[id])).rows[0];
+    if(!row)throw new NotFoundException('작업을 찾을 수 없습니다.');
+    return row;
+  }
+
+  async requestSummary(postId:string,actor:string) { return this.requestPostText('summary',postId,actor); }
+  async requestTags(postId:string,actor:string) { return this.requestPostText('tags',postId,actor); }
+
+  private async requestPostText(kind:'summary'|'tags',postId:string,actor:string) {
     return this.db.transaction(async tx=>{
-      const post=(await tx.query(`SELECT p.*,d.data FROM posts p JOIN post_drafts d ON d.post_id=p.id
-        WHERE p.id=$1 AND p.status='PUBLIC' FOR UPDATE OF p,d`,[postId])).rows[0];
-      if(!post)throw new NotFoundException('공개된 글만 요약할 수 있습니다.');
+      const post=(await tx.query(`SELECT p.id,d.data,d.version,d.ai_summary,d.ai_summary_version FROM posts p JOIN post_drafts d ON d.post_id=p.id
+        WHERE p.id=$1 FOR UPDATE OF p,d`,[postId])).rows[0];
+      if(!post)throw new NotFoundException('글을 찾을 수 없습니다.');
       const settings=(await tx.query('SELECT data,revision FROM ai_settings WHERE singleton=true FOR SHARE')).rows[0];
-      if(!ready()||!settings?.data.summaryEnabled)throw new BadRequestException('설정에서 AI 요약을 먼저 켜 주세요.');
-      if(post.summary||post.data.summary)throw new ConflictException('직접 작성한 요약이 있어 보존합니다.');
-      if(post.ai_summary&&post.ai_summary_version===post.version)return {state:'SUCCEEDED',summary:post.ai_summary};
-      await enqueuePostAi(tx,postId,post.version,'',[],true,['summary']);
-      await tx.query("INSERT INTO audit_events(actor_id,action,target_id) VALUES($1,'ai.summary.request',$2)",[actor,postId]);
-      const task=(await tx.query("SELECT id,state FROM ai_tasks WHERE post_id=$1 AND post_version=$2 AND settings_revision=$3 AND kind='summary'",[postId,post.version,settings.revision])).rows[0];
+      if(!ready()||!(kind==='summary'?settings?.data.summaryEnabled:settings?.data.tagsEnabled))
+        throw new BadRequestException(`설정에서 AI ${kind==='summary'?'요약':'태그'}를 먼저 켜 주세요.`);
+      if(!plainText(post.data.content).trim())throw new BadRequestException('본문을 먼저 작성해 주세요.');
+      if(kind==='summary' && post.data.summary)throw new ConflictException('직접 작성한 요약이 있어 보존합니다.');
+      if(kind==='tags' && post.data.tags?.length)throw new ConflictException('기존 태그가 있어 보존합니다.');
+      if(kind==='summary' && post.ai_summary && post.ai_summary_version===post.version)
+        return {state:'SUCCEEDED',summary:post.ai_summary};
+      await tx.query(`INSERT INTO ai_tasks(kind,post_id,post_version,profile,settings_revision,manual_request)
+        VALUES($1,$2,$3,$4,$5,true) ON CONFLICT DO NOTHING`,[kind,postId,post.version,settings.data,settings.revision]);
+      await tx.query('INSERT INTO audit_events(actor_id,action,target_id) VALUES($1,$2,$3)',[actor,`ai.${kind}.request`,postId]);
+      const task=(await tx.query('SELECT id,state FROM ai_tasks WHERE post_id=$1 AND post_version=$2 AND settings_revision=$3 AND kind=$4 AND manual_request',
+        [postId,post.version,settings.revision,kind])).rows[0];
       return task;
     });
   }
@@ -91,7 +97,7 @@ export class Ai {
   async requestArticle(raw: unknown, actor: string) {
     const { topic, requestId } = z.object({ topic: z.string().trim().min(2).max(200), requestId: z.uuid() }).strict().parse(raw);
     const settings = await this.settings();
-    if (!settings.connected || !settings.data.name) throw new BadRequestException('도우미 등록과 n8n 연결을 먼저 완료해 주세요.');
+    if (!settings.connected || !settings.data.name) throw new BadRequestException('도우미 등록과 플랫폼 AI 연결을 먼저 완료해 주세요.');
     await this.db.transaction(async tx => {
       await tx.query('SELECT pg_advisory_xact_lock(73701921)');
       const previous = (await tx.query('SELECT topic,kind FROM ai_tasks WHERE id=$1', [requestId])).rows[0];
@@ -106,12 +112,13 @@ export class Ai {
   }
 
   async retry(id: string) {
-    // A new platform job, same business request/cache. Never repeat an unknown AI execution automatically.
+    // Unknown executions retain the AI request ID and only reconcile status. A confirmed failure gets a new ID.
     const result = await this.db.query(`UPDATE ai_tasks SET state='PENDING',job_id=NULL,dispatch_id=gen_random_uuid(),error_code=NULL,
+      ai_request_id=CASE WHEN execution_error IS NOT NULL THEN gen_random_uuid() ELSE ai_request_id END,
+      ai_job_id=CASE WHEN execution_error IS NOT NULL THEN NULL ELSE ai_job_id END,
       execution_started_at=CASE WHEN execution_error IS NOT NULL THEN NULL ELSE execution_started_at END,execution_error=NULL
-      WHERE id=$1 AND state='FAILED' AND created_at>now()-interval '30 days'
-      AND (execution_started_at IS NULL OR result IS NOT NULL OR execution_error IS NOT NULL) RETURNING id`, [id]);
-    if (!result.rowCount) throw new ConflictException('재시도할 수 없습니다. 실행 결과가 불명확한 요청은 중복 생성을 막기 위해 보류합니다.');
+      WHERE id=$1 AND state='FAILED' AND created_at>now()-interval '30 days' RETURNING id`, [id]);
+    if (!result.rowCount) throw new ConflictException('재시도할 수 없는 작업입니다.');
     return { id };
   }
 
@@ -146,13 +153,18 @@ export class Ai {
     const settings = (await query.query('SELECT data,revision FROM ai_settings WHERE singleton=true')).rows[0];
     if (!settings || settings.revision !== task.settings_revision) return null;
     if (task.kind === 'article') return { topic: task.topic };
-    const p = (await query.query(`SELECT p.*,d.data AS draft FROM posts p JOIN post_drafts d ON d.post_id=p.id WHERE p.id=$1`, [task.post_id])).rows[0];
-    if (!p || p.status !== 'PUBLIC' || p.version !== task.post_version) return null;
-    if (task.kind === 'summary' && (!settings.data.summaryEnabled || p.summary || p.draft.summary)) return null;
-    if (task.kind === 'tags' && (!settings.data.tagsEnabled || p.draft.tags?.length || (await query.query('SELECT 1 FROM post_tags WHERE post_id=$1 LIMIT 1', [p.id])).rowCount)) return null;
-    if (task.kind === 'tags' && (inputHash(p.draft.content)!==inputHash(p.content) || p.draft.title!==p.title)) return null;
+    const p = (await query.query(`SELECT p.*,d.data AS draft,d.version AS draft_version FROM posts p JOIN post_drafts d ON d.post_id=p.id WHERE p.id=$1`, [task.post_id])).rows[0];
+    if (!p) return null;
+    if (task.kind !== 'comment') {
+      if (p.draft_version !== task.post_version) return null;
+      if (task.kind === 'summary' && (!settings.data.summaryEnabled || p.draft.summary)) return null;
+      if (task.kind === 'tags' && (!settings.data.tagsEnabled || p.draft.tags?.length)) return null;
+      const text=plainText(p.draft.content);
+      if (!text.trim()) return null;
+      return { title:p.draft.title, text:text.slice(0,48000), truncated:text.length>48000 };
+    }
+    if (p.status !== 'PUBLIC' || p.version !== task.post_version) return null;
     const article = { title: p.title, text: p.content_text.slice(0, 48000), truncated: p.content_text.length>48000 };
-    if (task.kind !== 'comment') return article;
     if (!(task.priority ? settings.data.mentionsEnabled : settings.data.commentsEnabled) || !p.comments_enabled) return null;
     const c = (await query.query(`SELECT c.*,COALESCE(c.guest_name,u.custom_nickname,u.nickname,'회원') AS name,
       target.ai_identity IS NOT NULL AS replies_to_assistant
@@ -235,16 +247,14 @@ export class Ai {
       }
       const result = parseResult(task.kind, task.result) as any;
       let skipped = false;
-      if (task.kind === 'summary') await tx.query('UPDATE posts SET ai_summary=$2,ai_summary_version=version,ai_summary_identity=$3 WHERE id=$1', [task.post_id,result.summary,identity(task.profile)]);
+      if (task.kind === 'summary') {
+        await tx.query('UPDATE post_drafts SET ai_summary=$2,ai_summary_version=version,ai_summary_identity=$3 WHERE post_id=$1',
+          [task.post_id,result.summary,identity(task.profile)]);
+      }
       if (task.kind === 'tags') {
         const tags=[...new Map((result.tags as string[]).map(name=>[normalizeTag(name),name.trim().normalize('NFC')])).values()];
-        for (const name of tags) {
-          const normalized = normalizeTag(name), slug = createHash('sha256').update(normalized).digest('hex').slice(0,16);
-          const tag = (await tx.query(`INSERT INTO tags(name,normalized_name,slug) VALUES($1,$2,$3)
-            ON CONFLICT(normalized_name) DO UPDATE SET normalized_name=EXCLUDED.normalized_name RETURNING id`, [name,normalized,slug])).rows[0];
-          await tx.query('INSERT INTO post_tags(post_id,tag_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [task.post_id,tag.id]);
-        }
-        await tx.query(`UPDATE post_drafts SET data=jsonb_set(data,'{tags}',$2),version=version+1,updated_at=now() WHERE post_id=$1`, [task.post_id,JSON.stringify(tags)]);
+        await tx.query(`UPDATE post_drafts SET data=jsonb_set(data,'{tags}',$2),version=version+1,updated_at=now(),
+          ai_summary_version=CASE WHEN ai_summary_version=version THEN version+1 ELSE ai_summary_version END WHERE post_id=$1`, [task.post_id,JSON.stringify(tags)]);
       }
       if (task.kind === 'comment') {
         if (!result.comment) skipped = true;

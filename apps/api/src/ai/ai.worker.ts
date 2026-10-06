@@ -1,18 +1,21 @@
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { config } from '../config.js';
 import { NotFoundException } from '@nestjs/common';
 import { Database } from '../database/database.js';
 import { Ai, inputHash } from './ai.service.js';
 import { PlatformJobs } from './platform-jobs.js';
+import { PlatformAi, PlatformAiError, taskResult, type PlatformAiJob } from './platform-ai.js';
 
 export class AiWorker {
   private readonly ai:Ai;
   private readonly jobs=new PlatformJobs();
+  private readonly platformAi=new PlatformAi();
   private readonly workerId=`ggeujeok-${randomUUID()}`;
   constructor(private readonly db:Database){this.ai=new Ai(db);}
 
   async run(signal:AbortSignal,priorityOnly=false) {
-    if (!config.N8N_WEBHOOK_BASE_URL || !config.N8N_WEBHOOK_TOKEN || !config.AI_CALLBACK_TOKEN) return;
+    if (!config.PLATFORM_API_KEY || !config.PLATFORM_PROJECT_ID || !config.PLATFORM_ENVIRONMENT_ID) return;
     await this.jobs.checkEnvironment();
     if(!priorityOnly)await this.ai.schedule();
     // The request UUID persists before contacting Jobs, including a manual retry.
@@ -57,18 +60,7 @@ export class AiWorker {
           assertLease();await this.db.query("UPDATE ai_tasks SET state='SKIPPED',completed_at=now(),error_code='CONTEXT_CHANGED' WHERE id=$1",[task.id]);
         } else {
           assertLease();await this.db.query("UPDATE ai_tasks SET state='RUNNING',input_hash=$2 WHERE id=$1",[task.id,hash]);
-          if(!task.result){
-            const base=new URL(config.N8N_WEBHOOK_BASE_URL);
-            if(base.protocol!=='https:' || base.username || base.password || base.search || base.hash)throw Error('N8N_CONFIGURATION');
-            const response=await fetch(`${base.href.replace(/\/$/,'')}/ggeujeok-${config.APP_ENV}-${task.kind}`,{
-              method:'POST',redirect:'error',signal:AbortSignal.any([abort.signal,signal,AbortSignal.timeout(90000)]),
-              headers:{'Content-Type':'application/json','X-Ggeujeok-Key':config.N8N_WEBHOOK_TOKEN},
-              body:JSON.stringify({requestId:task.id,hash,system:this.ai.prompt(task),context}),
-            });
-            await response.body?.cancel();
-            task=await this.ai.task(task.id);
-            if(!task.result)throw Error(response.ok?'RESULT_MISSING':'N8N_FAILED');
-          }
+          if(!task.result) await this.execute(task.id, hash, context, abort.signal, assertLease);
           await heartbeat();assertLease();await this.ai.apply(task.id,assertLease);
         }
       }
@@ -79,13 +71,53 @@ export class AiWorker {
           assertLease();
           if(error instanceof NotFoundException){await this.jobs.complete(job.id,leaseToken);return;}
           const task=await this.ai.task(job.payload.taskId);
-          // A cached result can be reapplied safely; an unknown model execution cannot be repeated.
           const state=(await this.db.query('SELECT execution_started_at,execution_error FROM ai_tasks WHERE id=$1',[task.id])).rows[0];
-          const retryable=!state.execution_started_at || !!task.result;
-          if(!['SUCCEEDED','SKIPPED'].includes(task.state))await this.db.query("UPDATE ai_tasks SET state='FAILED',error_code=$2 WHERE id=$1",[task.id,state.execution_error?'GENERATION_FAILED':retryable?'CONNECTION_FAILED':'EXECUTION_UNCONFIRMED']);
-          await this.jobs.fail(job.id,leaseToken,retryable);
+          const errorCode=state.execution_error ? 'GENERATION_FAILED' : state.execution_started_at ? 'EXECUTION_UNCONFIRMED' : 'CONNECTION_FAILED';
+          if(!['SUCCEEDED','SKIPPED'].includes(task.state))await this.db.query("UPDATE ai_tasks SET state='FAILED',error_code=$2 WHERE id=$1",[task.id,errorCode]);
+          // Only a cached result or a request that was never sent may be retried by Jobs.
+          await this.jobs.fail(job.id,leaseToken,!state.execution_started_at || !!task.result);
         } catch { /* Lease uncertainty prevents subsequent writes and reports. */ }
       }
     } finally {clearInterval(timer);signal.removeEventListener('abort',stop);}
+  }
+
+  private async execute(id:string, hash:string, context:unknown, signal:AbortSignal, assertLease:()=>void) {
+    const task=await this.ai.task(id);
+    let remote:PlatformAiJob | null=null;
+    if(task.ai_job_id) remote=await this.platformAi.get(task.ai_job_id,task.ai_request_id,task.kind,signal);
+    else if(task.execution_started_at) remote=await this.platformAi.find(task.ai_request_id,task.kind,signal);
+    else {
+      assertLease();
+      const started=await this.db.query('UPDATE ai_tasks SET execution_started_at=now() WHERE id=$1 AND execution_started_at IS NULL RETURNING id',[id]);
+      if(!started.rowCount) throw Error('AI_EXECUTION_ALREADY_STARTED');
+      try { remote=await this.platformAi.submit(task.ai_request_id,task.kind,hash,this.ai.prompt(task),context,signal); }
+      catch(error) {
+        // The POST response may have been lost after acceptance. Search the current environment before stopping.
+        if(error instanceof PlatformAiError && [400,401,403,413,422].includes(error.status))
+          await this.db.query("UPDATE ai_tasks SET execution_error='REQUEST_REJECTED' WHERE id=$1",[id]);
+        else remote=await this.platformAi.find(task.ai_request_id,task.kind,signal).catch(()=>null);
+        if(!remote) throw error;
+      }
+    }
+    if(!remote) throw Error('AI_REQUEST_UNCONFIRMED');
+    assertLease();
+    await this.db.query('UPDATE ai_tasks SET ai_job_id=$2 WHERE id=$1 AND ai_request_id=$3',[id,remote.id,task.ai_request_id]);
+    const deadline=Date.now()+10*60*1000;
+    while(remote.status==='running') {
+      if(Date.now()>deadline)throw Error('AI_RESULT_PENDING');
+      await delay(3000,undefined,{signal});assertLease();
+      remote=await this.platformAi.get(remote.id,task.ai_request_id,task.kind,signal);
+    }
+    if(remote.status!=='succeeded' || remote.result_expired || remote.result==null) {
+      if(remote.status==='failed' || remote.status==='cancelled')
+        await this.db.query("UPDATE ai_tasks SET execution_error='GENERATION_FAILED' WHERE id=$1",[id]);
+      throw Error('AI_RESULT_UNAVAILABLE');
+    }
+    assertLease();
+    try { await this.ai.cacheResult(id,{hash,result:taskResult(remote.result)}); }
+    catch(error) {
+      await this.db.query("UPDATE ai_tasks SET execution_error='INVALID_RESPONSE' WHERE id=$1",[id]);
+      throw error;
+    }
   }
 }

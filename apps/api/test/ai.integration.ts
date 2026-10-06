@@ -10,14 +10,17 @@ import { Activity } from '../src/activity/activity.service.js';
 import { Captchas } from '../src/activity/captcha.service.js';
 import { Notifications } from '../src/notifications/notifications.service.js';
 import { initialPost } from '../src/posts/post-input.js';
+import { Posts } from '../src/posts/posts.service.js';
 
 if(config.APP_ENV!=='test'||config.PGDATABASE!=='ggeujeok_test')throw Error('Requires isolated test database');
-Object.assign(config,{N8N_WEBHOOK_BASE_URL:'https://test.invalid/webhook',N8N_WEBHOOK_TOKEN:'test',AI_CALLBACK_TOKEN:'test'});
-const db=new Database(),ai=new Ai(db),ids:string[]=[],posts:string[]=[];
+Object.assign(config,{PLATFORM_API_KEY:'test',PLATFORM_PROJECT_ID:randomUUID(),PLATFORM_ENVIRONMENT_ID:randomUUID()});
+const db=new Database(),ai=new Ai(db),postService=new Posts(db),ids:string[]=[],posts:string[]=[];
 after(async()=>{await db.query('DELETE FROM posts WHERE id=ANY($1::uuid[])',[posts]);await db.query('DELETE FROM ai_tasks WHERE actor_id=ANY($1::uuid[])',[ids]);await db.query('DELETE FROM users WHERE id=ANY($1::uuid[])',[ids]);await db.query('DELETE FROM ai_settings');await db.end();});
 async function user(name:string){const id=randomUUID();ids.push(id);await db.query('INSERT INTO users(id,issuer,subject,display_name,nickname) VALUES($1::uuid,$2,$1::text,$3,$3)',[id,'https://ai-test.invalid',name]);return id;}
 async function post(author:string,title:string){
   const id=randomUUID();posts.push(id);const data=initialPost(`ai-test-${id}`);data.title=title;
+  data.categoryId=(await db.query("SELECT id FROM categories WHERE slug='lumi-view'")).rows[0].id;
+  data.content.content.content=[{type:'paragraph',content:[{type:'text',text:'실제 본문'}]}];
   await db.query(`INSERT INTO posts(id,slug,title,author_id,content,content_text,status,category_id,published_at)
     SELECT $1,$2,$3,$4,$5,'실제 본문', 'PUBLIC',id,now() FROM categories WHERE slug='lumi-view'`,[id,data.slug,title,author,data.content]);
   await db.query('INSERT INTO post_drafts(post_id,data,base_version) VALUES($1,$2,1)',[id,data]);return id;
@@ -68,9 +71,16 @@ test('assistant memory is account scoped, mentions bypass scheduled batch limit,
   await ai.apply(guestTask.id,()=>{});assert.equal((await ai.task(guestTask.id)).state,'SKIPPED');
   const summary=await ai.requestSummary(a,owner);await generated(summary.id,{summary:'루미가 핵심을 요약했어.'});
   await ai.apply(summary.id,()=>{});
+  const beforePublish=(await db.query('SELECT ai_summary FROM posts WHERE id=$1',[a])).rows[0];
+  assert.equal(beforePublish.ai_summary,null,'manual generation stays in the editor until publication');
+  const editor=await postService.edit(a);
+  await postService.save(a,{version:editor.version,data:{...editor.data,tags:['기록']}});
+  assert.equal((await postService.edit(a)).aiSummary,'루미가 핵심을 요약했어.','metadata changes retain a current summary');
+  await postService.publish(a,{draftVersion:2,baseVersion:1,status:'PUBLIC'},owner);
   const result=(await db.query('SELECT ai_summary,summary,ai_summary_identity FROM posts WHERE id=$1',[a])).rows[0];
   assert.equal(result.summary,'');assert.equal(result.ai_summary_identity.name,'루미');assert.equal(result.ai_summary,'루미가 핵심을 요약했어.');
-  await db.query("UPDATE posts SET summary='직접 쓴 요약' WHERE id=$1",[b]);await assert.rejects(()=>ai.requestSummary(b,owner));
+  await db.query("UPDATE post_drafts SET data=jsonb_set(data,'{summary}',to_jsonb('직접 쓴 요약'::text)) WHERE post_id=$1",[b]);
+  await assert.rejects(()=>ai.requestSummary(b,owner));
   const pending=(await db.query("SELECT id FROM ai_tasks WHERE post_id=$1 AND kind='comment' AND state='PENDING' LIMIT 1",[a])).rows[0];
   const current=await ai.settings();await ai.saveSettings({revision:current.revision,data:{...profile,commentsEnabled:false,mentionsEnabled:false}},owner);
   assert.equal(await ai.context(await ai.task(pending.id)),null);
@@ -79,17 +89,27 @@ test('assistant memory is account scoped, mentions bypass scheduled batch limit,
 test('tags fill an empty draft without hiding an editor conflict; generated articles stay disclosed drafts in the assigned category',async()=>{
   const owner=await user('ai-draft-owner'),p=await post(owner,'태그 없는 글');
   const settings=await ai.settings();
-  const tags=(await db.query(`INSERT INTO ai_tasks(kind,post_id,post_version,profile,settings_revision)
-    VALUES('tags',$1,1,$2,$3) RETURNING id`,[p,settings.data,settings.revision])).rows[0];
+  const legacy=(await db.query(`INSERT INTO ai_tasks(kind,post_id,post_version,profile,settings_revision,state)
+    VALUES('tags',$1,1,$2,$3,'SUCCEEDED') RETURNING id`,[p,settings.data,settings.revision])).rows[0];
+  const tags=await ai.requestTags(p,owner);
+  assert.notEqual(tags.id,legacy.id,'legacy published-revision tasks do not collide with manual draft requests');
+  assert.equal((await ai.requestTags(p,owner)).id,tags.id,'repeated clicks share the same manual task');
+  assert.deepEqual(await ai.status(tags.id),{id:tags.id,state:'PENDING',errorCode:null});
   await generated(tags.id,{tags:['도커','운영']});await ai.apply(tags.id,()=>{});
   const draft=(await db.query('SELECT version,data FROM post_drafts WHERE post_id=$1',[p])).rows[0];
   assert.equal(draft.version,2);assert.deepEqual(draft.data.tags,['도커','운영']);
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM post_tags WHERE post_id=$1',[p])).rows[0].n,0);
+  await postService.publish(p,{draftVersion:2,baseVersion:1,status:'PUBLIC'},owner);
+  assert.equal((await db.query("SELECT count(*)::int AS n FROM ai_tasks WHERE post_id=$1 AND kind='summary'",[p])).rows[0].n,0,
+    'publishing does not automatically request an AI summary');
   const article=await ai.requestArticle({topic:'요즘 기술',requestId:randomUUID()},owner);
   await generated(article.id,{title:'새로운 기술 이야기',paragraphs:['첫 문단.','두 번째 문단.','마지막 문단.'],sources:[{title:'자료',url:'https://example.com/source'}]});
   await ai.apply(article.id,()=>{});await ai.apply(article.id,()=>{});
   const task=await ai.task(article.id);posts.push(task.post_id!);
   const created=(await db.query('SELECT p.status,p.ai_generated,p.ai_identity,c.slug FROM posts p JOIN categories c ON c.id=p.category_id WHERE p.id=$1',[task.post_id])).rows[0];
   assert.equal(created.status,'DRAFT');assert.equal(created.ai_generated,true);assert.equal(created.ai_identity.name,'루미');assert.equal(created.slug,'lumi-view');
+  assert.equal((await ai.requestSummary(task.post_id!,owner)).state,'PENDING');
+  assert.equal((await ai.requestTags(task.post_id!,owner)).state,'PENDING');
   const another=await post(owner,'설정 변경 중인 요약');
   const before=await ai.requestSummary(another,owner);
   const current=await ai.settings();await ai.saveSettings({data:{...current.data,tone:'짧은 반말'},revision:current.revision},owner);

@@ -184,9 +184,11 @@ docker compose -f compose.test.yaml down
 - 배포 전 DB 백업·마이그레이션 검증, 실패 시 이미지 복귀와 DB 호환성을 확인한다. 비가역 DB 변경을 단순 이미지 교체로 되돌린다고 가정하지 않는다.
 - 상태 확인·서비스별 로그·실패 Job·재처리·백업/복원·롤백 절차는 실제 구현과 함께 확정하고 검증한다. n8n·알림·통계·로그 장애는 글 저장/조회와 분리한다.
 
-### n8n 연결 관리
+### 플랫폼 AI 연결 관리
 
-기능 정책은 [AI 도우미](content.md#automation)를 따른다. 끄적 전용 워크플로는 `scripts/n8n-workflows.mjs`에서 만들고 다음 명령으로 등록·갱신한다.
+기능 정책은 [AI 도우미](content.md#automation), 외부 계약은 [플랫폼 AI 자료](platform-integration.md)를 따른다. API·worker에는 환경별 `PLATFORM_URL`·`PLATFORM_API_KEY`·`PLATFORM_PROJECT_ID`·`PLATFORM_ENVIRONMENT_ID`를 주입한다. 기존 플랫폼 Job도 계속 사용하며 worker 전용 키를 별도로 설정한 경우 `PLATFORM_WORKER_API_KEY`를 유지한다. AI 실행에는 `ai:execute`·`ai:jobs:read`, Job 처리에는 `jobs:write/read/work` 권한이 필요하다. 키의 `integration/context` 프로젝트·환경과 설정값을 대조하고 DEV/PROD를 섞지 않는다.
+
+기존 끄적 전용 n8n 워크플로는 보존하지만 새 AI 작업의 호출 경로가 아니다. 아래 명령은 해당 **기존 워크플로를 별도로 관리해야 할 때만** 사용한다. 새 AI 연동을 위해 실행하지 않는다.
 
 ```sh
 # DEV 연동을 준비한 뒤에만 실행
@@ -196,10 +198,10 @@ dotenvx run --strict --overload --no-armor --no-native -f .env.prod -- node scri
 ```
 
 - 로컬 관리용 `N8N_MANAGEMENT_API_KEY`는 n8n 관리 API 키다. 운영 파일에 이 값이 없다면 실행할 PowerShell 세션에 `$env:N8N_MANAGEMENT_API_KEY = .\.tools\dotenvx.exe get N8N_MANAGEMENT_API_KEY -f .env.dev --no-armor --no-native`로 기존 관리 키만 읽어 제공하고, 관리 명령이 끝나면 `Remove-Item Env:N8N_MANAGEMENT_API_KEY`로 지운다. 다른 개발 설정을 운영 명령에 함께 로드하지 않는다. API/worker 컨테이너나 브라우저에 넣지 않는다. 기존 OpenRouter 자격증명을 참조하며 그 키를 복사하거나 변경하지 않는다.
-- 실행 환경은 `N8N_WEBHOOK_BASE_URL`, `N8N_WEBHOOK_TOKEN`, `AI_CALLBACK_TOKEN`을 API/worker에 주입한다. 웹훅 인증과 결과 보관 인증은 별도 키를 쓴다. 실제 값은 해당 환경 파일과 n8n 자격증명에만 둔다.
+- 기존 워크플로에는 `N8N_WEBHOOK_BASE_URL`, `N8N_WEBHOOK_TOKEN`, `AI_CALLBACK_TOKEN`이 필요하다. 새 플랫폼 AI 작업은 이 값과 결과 보관 API를 사용하지 않는다. 기존 실행 중 작업이 남아 있는 동안은 콜백 설정을 제거하지 않는다.
 - 등록 스크립트는 개발 `output/n8n/ggeujeok-resources.json`, 운영 `output/n8n/ggeujeok-resources-production.json`에 기록한 끄적 리소스만 갱신한다. 기존 워크플로가 보존됐는지 비교하고, 사용자가 고른 워크플로별 모델도 유지한다. 이 로컬 관리 자료를 잃었다면 재등록 전에 기존 끄적 리소스 ID를 확인한다.
 - 개발 일반 큐와 호출 전용 큐를 분리한다. 플랫폼 키의 프로젝트·환경을 검사하며 일반 작업과 `@루미` 호출 소비자를 독립 실행한다. 이미지에 비밀값을 넣지 않는다.
-- 워크플로 실행 내용의 n8n 저장은 끈다. 무료 모델 시간 초과·형식 실패는 관리자 작업 목록에서 확인한다. 실행 결과가 불명확한 요청을 무조건 재실행하지 않는다.
+- 새 플랫폼 AI 작업은 원격 ID로 결과를 조회한다. 모델 실패·형식 실패·결과 미확인은 관리자 작업 목록에서 확인하고, 불명확한 접수에 새 AI 요청 ID를 발급하지 않는다. 실제 공급자 호출과 사용량은 DEV 작업으로 별도 검수한다.
 
 
 ### 광고 설정
