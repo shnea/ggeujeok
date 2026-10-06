@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { config } from '../config.js';
 import { NotFoundException } from '@nestjs/common';
+import { ZodError } from 'zod';
 import { Database } from '../database/database.js';
 import { Ai, inputHash } from './ai.service.js';
 import { PlatformJobs } from './platform-jobs.js';
@@ -116,7 +117,9 @@ export class AiWorker {
     assertLease();
     try { await this.ai.cacheResult(id,{hash,result:taskResult(remote.result)}); }
     catch(error) {
-      await this.db.query("UPDATE ai_tasks SET execution_error='INVALID_RESPONSE' WHERE id=$1",[id]);
+      // A database write failure leaves a valid remote result available for reconciliation.
+      if(error instanceof ZodError)
+        await this.db.query("UPDATE ai_tasks SET execution_error='INVALID_RESPONSE' WHERE id=$1",[id]);
       throw error;
     }
   }
