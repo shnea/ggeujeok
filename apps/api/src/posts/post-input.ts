@@ -11,7 +11,7 @@ export const postInput = z.object({
   commentsEnabled: z.boolean().default(true),
   tags: z.array(z.string().trim().min(1).max(80)).max(20), content: z.unknown(),
 }).strict();
-export const saveInput = z.object({ version: z.number().int().positive(), data: postInput }).strict();
+export const saveInput = z.object({ version: z.number().int().positive(), aiRevision:z.number().int().nonnegative().default(0), data: postInput }).strict();
 export const publishInput = z.object({ draftVersion: z.number().int().positive(), baseVersion: z.number().int().positive(),
   status: z.enum(['PUBLIC', 'PRIVATE']) }).strict();
 export const categoryInput = z.object({ name: z.string().trim().normalize('NFC').min(1).max(80), slug,

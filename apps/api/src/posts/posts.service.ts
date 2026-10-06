@@ -1,11 +1,12 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { PoolClient } from 'pg';
 import { createDraft } from './create-draft.js';
 import { Database } from '../database/database.js';
 import { syncImageReferences } from '../files/references.js';
-import { initialPost, listInput, normalizeTag, plainText, publishInput, saveInput, tagSearchInput, validatePost, type PostData } from './post-input.js';
+import { initialPost, listInput, normalizeTag, plainText, publishInput, saveInput, tagSearchInput, validatePost } from './post-input.js';
+import { syncTags } from './tags.js';
 
 // Existing posts also get the first body image without rewriting their content.
 const thumbnailColumn = `COALESCE(p.thumbnail_id::text, NULLIF(jsonb_path_query_first(p.content,
@@ -122,23 +123,31 @@ export class Posts {
   }
 
   async edit(id: string) {
-    const result = await this.db.query(`SELECT p.id,p.status,p.published_at AS "publishedAt",p.version AS "postVersion",p.ai_generated AS "aiGenerated",p.ai_identity AS "aiIdentity",CASE WHEN d.ai_summary_version=d.version THEN d.ai_summary END AS "aiSummary",
-      d.data,d.version,d.base_version AS "baseVersion" FROM posts p JOIN post_drafts d ON d.post_id=p.id WHERE p.id=$1`, [id]);
+    const result = await this.db.query(`SELECT p.id,p.status,p.published_at AS "publishedAt",p.version AS "postVersion",p.ai_generated AS "aiGenerated",p.ai_identity AS "aiIdentity",d.ai_summary AS "aiSummary",
+      d.ai_tags AS "aiTags",d.ai_revision AS "aiRevision",d.data,d.version,d.base_version AS "baseVersion" FROM posts p JOIN post_drafts d ON d.post_id=p.id WHERE p.id=$1`, [id]);
     if (!result.rows[0]) throw new NotFoundException('글을 찾을 수 없습니다.');
     return result.rows[0];
   }
 
   async save(id: string, input: unknown) {
-    const { version, data: raw } = saveInput.parse(input);
+    const { version, aiRevision, data: raw } = saveInput.parse(input);
     const data = validatePost(raw);
     return this.db.transaction(async tx => {
       const post = await tx.query('SELECT slug,published_at FROM posts WHERE id=$1 FOR UPDATE', [id]);
       if (!post.rows[0]) throw new NotFoundException();
       if (post.rows[0].published_at && post.rows[0].slug !== data.slug) throw new BadRequestException('최초 공개 후에는 주소를 바꿀 수 없습니다.');
+      const draft=(await tx.query('SELECT ai_tags,ai_revision FROM post_drafts WHERE post_id=$1',[id])).rows[0];
+      let aiTags=draft.ai_tags as string[];
+      if(aiRevision!==draft.ai_revision){
+        data.tags=[...new Map([...data.tags,...aiTags].map(name=>[normalizeTag(name),name])).values()].slice(0,20);
+      }else{
+        const selected=new Set(data.tags.map(normalizeTag));
+        aiTags=aiTags.filter(name=>selected.has(normalizeTag(name)));
+      }
       const result = await tx.query(`UPDATE post_drafts SET data=$2,version=version+1,updated_at=now(),
-        ai_summary_version=CASE WHEN ai_summary_version=version AND data->'content'=$2::jsonb->'content'
-          AND data->>'title'=$2::jsonb->>'title' THEN version+1 ELSE ai_summary_version END
-        WHERE post_id=$1 AND version=$3 RETURNING version,base_version AS "baseVersion"`, [id, data, version]);
+        ai_tags=$4,ai_summary_version=CASE WHEN ai_summary IS NOT NULL THEN version+1 ELSE ai_summary_version END
+        WHERE post_id=$1 AND version=$3 RETURNING version,base_version AS "baseVersion",data->'tags' AS tags,
+          ai_tags AS "aiTags",ai_revision AS "aiRevision",ai_summary AS "aiSummary"`, [id, data, version,JSON.stringify(aiTags)]);
       if (!result.rows[0]) throw new ConflictException('다른 화면에서 편집본이 바뀌었습니다. 내용을 복사한 뒤 다시 열어 주세요.');
       await syncImageReferences(tx, id, data.content, 'DRAFT', data.thumbnailId);
       return result.rows[0];
@@ -149,7 +158,7 @@ export class Posts {
     const expected = publishInput.parse(input);
     return this.db.transaction(async tx => {
       const locked = await tx.query(`SELECT p.*,d.data,d.version AS draft_version,d.base_version,
-        d.ai_summary AS draft_ai_summary,d.ai_summary_version AS draft_ai_summary_version,d.ai_summary_identity AS draft_ai_summary_identity
+        d.ai_summary AS draft_ai_summary,d.ai_summary_version AS draft_ai_summary_version,d.ai_summary_identity AS draft_ai_summary_identity,d.ai_tags AS draft_ai_tags
         FROM posts p JOIN post_drafts d ON d.post_id=p.id WHERE p.id=$1 FOR UPDATE OF p,d`, [id]);
       const post = locked.rows[0];
       if (!post) throw new NotFoundException();
@@ -164,11 +173,12 @@ export class Posts {
         published_at=CASE WHEN $8='PUBLIC' THEN COALESCE(published_at,now()) ELSE published_at END,version=version+1,updated_at=now()
         WHERE id=$1 RETURNING version`, [id, data.title, data.slug, data.summary, data.content, text, data.categoryId, expected.status, data.thumbnailId, data.commentsEnabled]);
       const changed = !post.published_at || !isDeepStrictEqual(post.content,data.content) || post.title !== data.title;
-      if (!data.summary && post.draft_ai_summary && post.draft_ai_summary_version === post.draft_version)
+      if (!data.summary && post.draft_ai_summary)
         await tx.query('UPDATE posts SET ai_summary=$2,ai_summary_version=version,ai_summary_identity=$3 WHERE id=$1',
           [id,post.draft_ai_summary,post.draft_ai_summary_identity]);
       else if (!changed && post.ai_summary_version === post.version) await tx.query('UPDATE posts SET ai_summary_version=version WHERE id=$1', [id]);
-      await this.setTags(tx, id, data);
+      await syncTags(tx,id,data.tags);
+      await tx.query('UPDATE posts SET ai_tags=$2 WHERE id=$1',[id,JSON.stringify(post.draft_ai_tags)]);
       await tx.query(`UPDATE post_drafts SET base_version=$2,version=version+1,updated_at=now(),
         ai_summary_version=CASE WHEN ai_summary_version=version THEN version+1 ELSE ai_summary_version END WHERE post_id=$1`, [id, result.rows[0].version]);
       await this.audit(tx, actor, expected.status === 'PUBLIC' ? 'post.publish' : 'post.private', id);
@@ -183,17 +193,6 @@ export class Posts {
       await this.audit(tx, actor, 'post.delete', id);
       return { deleted: true };
     });
-  }
-
-  private async setTags(tx: PoolClient, id: string, data: PostData) {
-    await tx.query('DELETE FROM post_tags WHERE post_id=$1', [id]);
-    for (const name of data.tags) {
-      const normalized = normalizeTag(name);
-      const tagSlug = createHash('sha256').update(normalized).digest('hex').slice(0, 16);
-      const tag = await tx.query(`INSERT INTO tags(name,normalized_name,slug) VALUES($1,$2,$3)
-        ON CONFLICT(normalized_name) DO UPDATE SET normalized_name=EXCLUDED.normalized_name RETURNING id`, [name, normalized, tagSlug]);
-      await tx.query('INSERT INTO post_tags(post_id,tag_id) VALUES($1,$2)', [id, tag.rows[0].id]);
-    }
   }
 
   private async audit(tx: PoolClient, actor: string, action: string, id: string) {

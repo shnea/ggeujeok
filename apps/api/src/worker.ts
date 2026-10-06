@@ -23,8 +23,13 @@ async function runAi(priorityOnly:boolean) {
     try { await setTimeout(2000,undefined,{signal:stop.signal}); } catch { break; }
   }
 }
-// Mentions have their own consumer, so a long article cannot hold up a direct greeting or notifications.
-const aiWork=Promise.all([runAi(false),runAi(true)]);
+async function collectAiResults(){
+  while(!stop.signal.aborted){
+    try{await ai.collect(stop.signal);}catch{logs.write('worker.failed',{component:'worker'});}
+    try{await setTimeout(2000,undefined,{signal:stop.signal});}catch{break;}
+  }
+}
+const aiWork=Promise.all([runAi(false),runAi(true),collectAiResults()]);
 let nextCleanup = 0;
 try {
   while (!stop.signal.aborted) {
@@ -41,7 +46,7 @@ try {
         () => db.query("DELETE FROM audit_events WHERE created_at<now()-interval '180 days'"),
         () => db.query("DELETE FROM sessions WHERE expires_at<now() OR created_at<now()-interval '7 days' OR last_seen_at<now()-interval '24 hours'"),
         () => files.run(),
-        () => db.query("UPDATE ai_tasks SET result=NULL,profile='{}'::jsonb WHERE state IN ('SUCCEEDED','SKIPPED','FAILED') AND created_at<now()-interval '30 days' AND result IS NOT NULL"),
+        () => db.query("UPDATE ai_tasks SET result=NULL,input_snapshot=NULL,profile='{}'::jsonb WHERE state IN ('SUCCEEDED','SKIPPED','FAILED') AND created_at<now()-interval '30 days' AND (result IS NOT NULL OR input_snapshot IS NOT NULL)"),
       ]) {
         if (stop.signal.aborted) break;
         try { await cleanup(); } catch { logs.write('worker.failed', { component: 'retention' }); }

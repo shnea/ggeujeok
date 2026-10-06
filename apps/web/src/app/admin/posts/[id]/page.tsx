@@ -2,7 +2,7 @@
 
 import { Eye, Pencil, Globe, Save, Download, LockKeyhole, Trash2, Bot } from 'lucide-react';
 
-import { use, useEffect, useMemo, useRef, useState } from 'react';
+import { use, useEffect, useMemo, useState } from 'react';
 import { ShneaEditor } from '@shnea/editor/react';
 import { DocumentViewer } from '@/components/document-viewer';
 import { api, mutation, type Category, type Session } from '@/lib/api';
@@ -34,39 +34,27 @@ export default function EditPage({ params }: { params: Promise<{ id: string }> }
 }
 
 function Editor({ initial, csrf, categories }: { initial: Draft; csrf: string; categories: Category[] }) {
-  const { draft, change, save, saveCurrent, reload, publish, status, error, pending, allowExit } = useDraft(initial, csrf);
+  const { draft, change, save, saveCurrent, publish, status, error, pending, allowExit } = useDraft(initial, csrf);
   const [preview, setPreview] = useState(false);
   const [editorError, setEditorError] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [coverUploading, setCoverUploading] = useState(false);
   const [aiBusy,setAiBusy]=useState(false),[aiMessage,setAiMessage]=useState('');
-  const aiController=useRef<AbortController|null>(null);
-  useEffect(()=>()=>aiController.current?.abort(),[]);
   const { data } = draft;
   const attachments = useMemo(() => editorAttachments(draft.id, csrf), [draft.id, csrf]);
-  const blocked = pending || deleting || aiBusy;
+  const blocked = pending || deleting;
   async function requestText(kind:'summary'|'tags'){
-    if(aiController.current)return;
-    const controller=new AbortController();aiController.current=controller;
+    if(aiBusy)return;
     const label=kind==='summary'?'요약':'태그';
     setAiBusy(true);setAiMessage('');
     try{
       await saveCurrent();
-      let task=await api<{id?:string;state:string}>(`/api/admin/ai/posts/${draft.id}/${kind}`,{...mutation('POST',csrf),signal:controller.signal});
-      setAiMessage(`AI ${label}를 생성하고 있습니다. 완료되면 편집본에 표시됩니다.`);
-      const deadline=Date.now()+10*60*1000;
-      while(!['SUCCEEDED','SKIPPED','FAILED'].includes(task.state)){
-        if(Date.now()>deadline)throw new Error('처리가 계속 진행 중입니다. 설정 → AI 도우미에서 상태를 확인한 뒤 편집 화면을 다시 열어 주세요.');
-        await new Promise<void>(resolve=>setTimeout(resolve,2000));
-        if(controller.signal.aborted)return;
-        task=await api(`/api/admin/ai/tasks/${task.id}`,{signal:controller.signal});
-      }
-      if(task.state==='FAILED')throw new Error('AI 생성 상태를 확인해 주세요. 설정 → AI 도우미에서 재시도할 수 있습니다.');
-      if(task.state==='SKIPPED')throw new Error('내용이나 설정이 바뀌어 결과를 반영하지 않았습니다. 편집 화면을 다시 열어 주세요.');
-      await reload(controller.signal);setAiMessage(`AI ${label}를 편집본에 반영했습니다. 공개하려면 공개본에 반영해 주세요.`);
+      const task=await api<{id:string;state:string}>(`/api/admin/ai/posts/${draft.id}/${kind}`,mutation('POST',csrf));
+      setAiMessage(task.state==='FAILED'?'이 글의 이전 요청을 확인해 주세요. 설정 → AI 도우미에서 재시도할 수 있습니다.':
+        `AI ${label} 요청을 접수했습니다. 화면을 닫아도 계속 처리하며 완료 결과는 이 글에 자동 저장됩니다.`);
     }
-    catch(error){if(!controller.signal.aborted)setAiMessage((error as Error).message);}
-    finally{aiController.current=null;if(!controller.signal.aborted)setAiBusy(false);}
+    catch(error){setAiMessage((error as Error).message);}
+    finally{setAiBusy(false);}
   }
   function download() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
@@ -99,11 +87,11 @@ function Editor({ initial, csrf, categories }: { initial: Draft; csrf: string; c
         </select><label htmlFor="post-slug">글 주소</label><input id="post-slug" value={data.slug} maxLength={120} disabled={Boolean(draft.publishedAt)} onChange={event => change({ slug: event.target.value })} />
         <p className="field-help">영문 소문자·숫자·하이픈. 첫 공개 후에는 바꿀 수 없습니다.</p>
         {draft.aiGenerated&&<p className="field-help">{draft.aiIdentity?.name||'도우미'}가 작성한 AI 초안입니다. 수정·공개 후에도 AI 작성 표시를 유지합니다.</p>}<label htmlFor="summary">요약 <span className="optional">선택</span></label><textarea id="summary" rows={5} value={data.summary} maxLength={500} onChange={event => change({ summary: event.target.value })} placeholder="이 글을 짧게 소개해 주세요" />
-        <p className="field-help">요약은 직접 작성하거나 아래 버튼으로 생성합니다. 생성한 요약은 편집본의 현재 내용에만 적용되며, 공개본 반영 전에는 방문자에게 보이지 않습니다.</p>
+        <p className="field-help">버튼을 누르면 생성 작업을 접수합니다. 완료된 요약·태그는 이 글에 자동 저장되며, 공개된 글에도 바로 적용됩니다.</p>
         {draft.aiSummary&&!data.summary&&<p className="field-help"><span className="ai-badge">AI 요약</span> {draft.aiSummary}</p>}{!data.summary&&<button type="button" className="secondary" disabled={blocked||aiBusy} onClick={()=>void requestText('summary')}><Bot aria-hidden="true" />{aiBusy?'요청 중…':'AI 요약 생성'}</button>}{aiMessage&&<p className="field-help" role="status">{aiMessage}</p>}<CoverPicker content={data.content} value={data.thumbnailId || null} attachments={attachments} disabled={blocked}
           onChange={thumbnailId => change({ thumbnailId })} onBusy={setCoverUploading} />
         <TagInput value={data.tags} disabled={blocked} onChange={tags => change({ tags })} />
-        {!data.tags.length&&<button type="button" className="secondary" disabled={blocked||aiBusy} onClick={()=>void requestText('tags')}><Bot aria-hidden="true" />{aiBusy?'요청 중…':'AI 태그 생성'}</button>}
+        <button type="button" className="secondary" disabled={blocked||aiBusy} onClick={()=>void requestText('tags')}><Bot aria-hidden="true" />{aiBusy?'접수 중…':'AI 태그 생성'}</button>
         <label className="setting-toggle"><span><strong>댓글 허용</strong><small>끄면 새 댓글·답글을 받지 않습니다. 기존 댓글은 남습니다.</small></span>
           <input type="checkbox" role="switch" checked={data.commentsEnabled ?? true} onChange={event => change({ commentsEnabled: event.target.checked })} /></label>
       </fieldset><div className="settings-bottom"><p className="field-help">이미지: JPEG·PNG·WebP·GIF, 파일당 최대 20MiB.</p><button className="secondary" disabled={blocked || coverUploading} onClick={() => publish('PRIVATE')}><LockKeyhole aria-hidden="true" />비공개로 저장</button>

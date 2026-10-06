@@ -2,9 +2,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { EditorDocument } from '@shnea/editor';
 import { api, ApiError, mutation } from '@/lib/api';
+import { mergeAiTags } from './ai-tags';
 
 export type DraftData = { title: string; slug: string; summary: string; categoryId: string | null; thumbnailId?: string | null; commentsEnabled?: boolean; tags: string[]; content: EditorDocument };
-export type Draft = { aiGenerated?: boolean; aiIdentity?: {name:string}; aiSummary?: string|null; id: string; data: DraftData; version: number; baseVersion: number; postVersion: number; status: string; publishedAt: string | null };
+export type Draft = { aiGenerated?: boolean; aiIdentity?: {name:string}; aiSummary?: string|null; aiTags?:string[]; aiRevision?:number; id: string; data: DraftData; version: number; baseVersion: number; postVersion: number; status: string; publishedAt: string | null };
 export function useDraft(initial: Draft, csrf: string) {
   const [draft, setDraft] = useState(initial);
   const current = useRef(initial);
@@ -17,8 +18,7 @@ export function useDraft(initial: Draft, csrf: string) {
   const [tick, setTick] = useState(0);
 
   const change = useCallback((fields: Partial<DraftData>) => {
-    const textChanged=fields.content!==undefined || (fields.title!==undefined && fields.title!==current.current.data.title);
-    current.current = { ...current.current, ...(textChanged?{aiSummary:null}:{}), data: { ...current.current.data, ...fields } };
+    current.current = { ...current.current, data: { ...current.current.data, ...fields } };
     revision.current += 1;
     dirtySince.current ??= Date.now();
     setDraft(current.current);
@@ -33,9 +33,11 @@ export function useDraft(initial: Draft, csrf: string) {
     setStatus('저장 중…'); setError('');
     const work = async () => {
       try {
-        const result = await api<{ version: number; baseVersion: number }>(`/api/admin/posts/${snapshot.id}/draft`,
-          mutation('PUT', csrf, { version: snapshot.version, data: snapshot.data }));
-        current.current = { ...current.current, ...result };
+        const result = await api<{ version: number; baseVersion: number;tags:string[];aiTags:string[];aiRevision:number;aiSummary:string|null }>(`/api/admin/posts/${snapshot.id}/draft`,
+          mutation('PUT', csrf, { version: snapshot.version, aiRevision:snapshot.aiRevision??0, data: snapshot.data }));
+        const tags=current.current.data.tags===snapshot.data.tags?result.tags:
+          mergeAiTags(current.current.data.tags,snapshot.aiTags??[],result.aiTags);
+        current.current = { ...current.current, ...result,data:{...current.current.data,tags} };
         savedRevision.current = snapshotRevision;
         dirtySince.current = revision.current === snapshotRevision ? null : Date.now();
         setDraft(current.current); setStatus(dirtySince.current ? '저장 대기' : '저장됨');
@@ -53,13 +55,22 @@ export function useDraft(initial: Draft, csrf: string) {
     do { await save(); } while (savedRevision.current !== revision.current);
   }, [save]);
 
-  const reload = useCallback(async (signal?:AbortSignal) => {
-    if (revision.current !== savedRevision.current) throw new Error('변경한 내용을 먼저 저장해 주세요.');
-    const snapshotRevision=revision.current;
-    const fresh=await api<Draft>(`/api/admin/posts/${current.current.id}`,{signal});
-    if (snapshotRevision !== revision.current) throw new Error('편집 내용이 바뀌었습니다. 먼저 저장한 뒤 다시 열어 주세요.');
-    current.current=fresh;setDraft(fresh);setStatus('저장됨');
-  }, []);
+  useEffect(()=>{
+    const controller=new AbortController();let reading=false;
+    const timer=setInterval(()=>{
+      if(reading||flight.current||pending||conflicted.current)return;
+      reading=true;
+      api<Draft>(`/api/admin/posts/${current.current.id}`,{signal:controller.signal}).then(fresh=>{
+        if(controller.signal.aborted||flight.current||fresh.version!==current.current.version||fresh.aiRevision===current.current.aiRevision)return;
+        const tags=revision.current===savedRevision.current?fresh.data.tags:
+          mergeAiTags(current.current.data.tags,current.current.aiTags??[],fresh.aiTags??[]);
+        current.current={...current.current,aiSummary:fresh.aiSummary,aiTags:fresh.aiTags,aiRevision:fresh.aiRevision,
+          data:{...current.current.data,tags}};
+        setDraft(current.current);
+      }).catch(()=>{}).finally(()=>{reading=false;});
+    },5000);
+    return()=>{controller.abort();clearInterval(timer);};
+  },[pending]);
 
   useEffect(() => {
     if (dirtySince.current === null || error || conflicted.current || pending) return;
@@ -90,5 +101,5 @@ export function useDraft(initial: Draft, csrf: string) {
     finally { setPending(false); }
   }
   function allowExit() { savedRevision.current = revision.current; }
-  return { draft, change, save, saveCurrent, reload, publish, status, error, pending, allowExit };
+  return { draft, change, save, saveCurrent, publish, status, error, pending, allowExit };
 }

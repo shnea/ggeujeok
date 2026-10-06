@@ -6,6 +6,7 @@ import { Database } from '../database/database.js';
 import { config } from '../config.js';
 import { initialPost, normalizeTag, plainText } from '../posts/post-input.js';
 import { createDraft } from '../posts/create-draft.js';
+import { syncTags } from '../posts/tags.js';
 import { Notifications } from '../notifications/notifications.service.js';
 import { assistantInput, emptyAssistant, identity, parseResult, systemPrompt, isMention, type Assistant, type TaskKind } from './assistant.js';
 
@@ -13,7 +14,7 @@ export type AiTask = { id: string; kind: TaskKind; post_id: string | null; post_
   comment_id: string | null; actor_id: string | null; topic: string | null; profile: Assistant;
   priority: boolean; settings_revision: number; state: string; job_id: string | null; ai_job_id: string | null;
   ai_request_id: string; dispatch_id: string; execution_started_at: Date | null;
-  input_hash: string | null; result: any };
+  input_snapshot: any; manual_request: boolean; input_hash: string | null; result: any };
 export const inputHash = (value: unknown) => {
   const { recentResponses: _style, ...context } = value as Record<string, unknown>;
   const stable = (item: any): any => item instanceof Date ? item.toJSON() : Array.isArray(item) ? item.map(stable) : item && typeof item === 'object' ? Object.fromEntries(Object.keys(item).sort().map(key => [key, stable(item[key])])) : item;
@@ -80,16 +81,19 @@ export class Ai {
       const settings=(await tx.query('SELECT data,revision FROM ai_settings WHERE singleton=true FOR SHARE')).rows[0];
       if(!ready()||!(kind==='summary'?settings?.data.summaryEnabled:settings?.data.tagsEnabled))
         throw new BadRequestException(`설정에서 AI ${kind==='summary'?'요약':'태그'}를 먼저 켜 주세요.`);
-      if(!plainText(post.data.content).trim())throw new BadRequestException('본문을 먼저 작성해 주세요.');
+      const text=plainText(post.data.content);
+      if(!text.trim())throw new BadRequestException('본문을 먼저 작성해 주세요.');
       if(kind==='summary' && post.data.summary)throw new ConflictException('직접 작성한 요약이 있어 보존합니다.');
-      if(kind==='tags' && post.data.tags?.length)throw new ConflictException('기존 태그가 있어 보존합니다.');
-      if(kind==='summary' && post.ai_summary && post.ai_summary_version===post.version)
-        return {state:'SUCCEEDED',summary:post.ai_summary};
-      await tx.query(`INSERT INTO ai_tasks(kind,post_id,post_version,profile,settings_revision,manual_request)
-        VALUES($1,$2,$3,$4,$5,true) ON CONFLICT DO NOTHING`,[kind,postId,post.version,settings.data,settings.revision]);
+      const snapshot={title:post.data.title,text:text.slice(0,48000),truncated:text.length>48000};
+      const active=(await tx.query(`SELECT id,state FROM ai_tasks WHERE post_id=$1 AND kind=$2 AND manual_request
+        AND (state IN ('PENDING','QUEUED','RUNNING') OR
+          (state='FAILED' AND execution_started_at IS NOT NULL AND execution_error IS NULL))
+        ORDER BY created_at DESC LIMIT 1`,[postId,kind])).rows[0];
+      if(active)return active;
+      const task=(await tx.query(`INSERT INTO ai_tasks(kind,post_id,post_version,profile,settings_revision,manual_request,input_snapshot,input_hash)
+        VALUES($1,$2,$3,$4,$5,true,$6,$7) RETURNING id,state`,
+        [kind,postId,post.version,settings.data,settings.revision,snapshot,inputHash(snapshot)])).rows[0];
       await tx.query('INSERT INTO audit_events(actor_id,action,target_id) VALUES($1,$2,$3)',[actor,`ai.${kind}.request`,postId]);
-      const task=(await tx.query('SELECT id,state FROM ai_tasks WHERE post_id=$1 AND post_version=$2 AND settings_revision=$3 AND kind=$4 AND manual_request',
-        [postId,post.version,settings.revision,kind])).rows[0];
       return task;
     });
   }
@@ -150,9 +154,16 @@ export class Ai {
   }
 
   async context(task: AiTask, query: Database | PoolClient = this.db) {
+    if(task.kind==='article')return {topic:task.topic};
+    if(task.manual_request){
+      const draft=(await query.query('SELECT data FROM post_drafts WHERE post_id=$1',[task.post_id])).rows[0];
+      if(!draft)return null;
+      if(task.input_snapshot)return task.input_snapshot;
+      const text=plainText(draft.data.content);
+      return {title:draft.data.title,text:text.slice(0,48000),truncated:text.length>48000};
+    }
     const settings = (await query.query('SELECT data,revision FROM ai_settings WHERE singleton=true')).rows[0];
     if (!settings || settings.revision !== task.settings_revision) return null;
-    if (task.kind === 'article') return { topic: task.topic };
     const p = (await query.query(`SELECT p.*,d.data AS draft,d.version AS draft_version FROM posts p JOIN post_drafts d ON d.post_id=p.id WHERE p.id=$1`, [task.post_id])).rows[0];
     if (!p) return null;
     if (task.kind !== 'comment') {
@@ -209,14 +220,15 @@ export class Ai {
     });
   }
 
-  async cacheResult(id: string, raw: unknown) {
+  async cacheResult(id: string, raw: unknown, requestId?:string) {
     const { hash, result } = z.object({hash:z.string().regex(/^[a-f0-9]{64}$/),result:z.unknown()}).strict().parse(raw);
     const task = await this.task(id), data = parseResult(task.kind, result);
     const updated = await this.db.query(`UPDATE ai_tasks SET result=$3 WHERE id=$1 AND input_hash=$2
-      AND execution_started_at IS NOT NULL AND result IS NULL RETURNING id`, [id,hash,data]);
+      AND execution_started_at IS NOT NULL AND result IS NULL AND ($4::uuid IS NULL OR ai_request_id=$4)
+      RETURNING id`, [id,hash,data,requestId??null]);
     if (!updated.rowCount) {
       const current = await this.task(id);
-      if (current.input_hash !== hash || inputHash(current.result ?? {}) !== inputHash(data)) throw new ConflictException();
+      if ((requestId&&current.ai_request_id!==requestId) || current.input_hash !== hash || inputHash(current.result ?? {}) !== inputHash(data)) throw new ConflictException();
     }
     return data;
   }
@@ -240,21 +252,34 @@ export class Ai {
       const task = await this.task(id, tx);
       if (['SUCCEEDED','SKIPPED'].includes(task.state)) return;
       await tx.query('SELECT singleton FROM ai_settings WHERE singleton=true FOR SHARE');
-      const context = await this.context(task, tx);
-      if (!context || inputHash(context) !== task.input_hash) {
+      const context = task.manual_request ? null : await this.context(task, tx);
+      if (!task.manual_request && (!context || inputHash(context) !== task.input_hash)) {
         await tx.query("UPDATE ai_tasks SET state='SKIPPED',completed_at=now(),error_code='CONTEXT_CHANGED' WHERE id=$1", [id]);
         assertLease(); return;
       }
       const result = parseResult(task.kind, task.result) as any;
       let skipped = false;
       if (task.kind === 'summary') {
-        await tx.query('UPDATE post_drafts SET ai_summary=$2,ai_summary_version=version,ai_summary_identity=$3 WHERE post_id=$1',
+        await tx.query('UPDATE post_drafts SET ai_summary=$2,ai_summary_version=version,ai_summary_identity=$3,ai_revision=ai_revision+1 WHERE post_id=$1',
+          [task.post_id,result.summary,identity(task.profile)]);
+        await tx.query('UPDATE posts SET ai_summary=$2,ai_summary_version=version,ai_summary_identity=$3,updated_at=now() WHERE id=$1',
           [task.post_id,result.summary,identity(task.profile)]);
       }
       if (task.kind === 'tags') {
         const tags=[...new Map((result.tags as string[]).map(name=>[normalizeTag(name),name.trim().normalize('NFC')])).values()];
-        await tx.query(`UPDATE post_drafts SET data=jsonb_set(data,'{tags}',$2),version=version+1,updated_at=now(),
-          ai_summary_version=CASE WHEN ai_summary_version=version THEN version+1 ELSE ai_summary_version END WHERE post_id=$1`, [task.post_id,JSON.stringify(tags)]);
+        const draft=(await tx.query('SELECT data,ai_tags FROM post_drafts WHERE post_id=$1',[task.post_id])).rows[0];
+        const previous=new Set((draft.ai_tags as string[]).map(normalizeTag));
+        const manual=(draft.data.tags as string[]).filter(name=>!previous.has(normalizeTag(name)));
+        const merged=[...new Map([...manual,...tags].map(name=>[normalizeTag(name),name])).values()].slice(0,20);
+        await tx.query(`UPDATE post_drafts SET data=jsonb_set(data,'{tags}',$2),ai_tags=$3,ai_revision=ai_revision+1,updated_at=now()
+          WHERE post_id=$1`, [task.post_id,JSON.stringify(merged),JSON.stringify(tags)]);
+        const published=(await tx.query(`SELECT p.ai_tags,COALESCE((SELECT jsonb_agg(t.name) FROM post_tags pt
+          JOIN tags t ON t.id=pt.tag_id WHERE pt.post_id=p.id),'[]') AS tags FROM posts p WHERE p.id=$1`,[task.post_id])).rows[0];
+        const previousPublished=new Set((published.ai_tags as string[]).map(normalizeTag));
+        const manualPublished=(published.tags as string[]).filter(name=>!previousPublished.has(normalizeTag(name)));
+        const publicTags=[...new Map([...manualPublished,...tags].map(name=>[normalizeTag(name),name])).values()].slice(0,20);
+        await syncTags(tx,task.post_id!,publicTags);
+        await tx.query('UPDATE posts SET ai_tags=$2,updated_at=now() WHERE id=$1',[task.post_id,JSON.stringify(tags)]);
       }
       if (task.kind === 'comment') {
         if (!result.comment) skipped = true;

@@ -11,6 +11,7 @@ import { Captchas } from '../src/activity/captcha.service.js';
 import { Notifications } from '../src/notifications/notifications.service.js';
 import { initialPost } from '../src/posts/post-input.js';
 import { Posts } from '../src/posts/posts.service.js';
+import { syncTags } from '../src/posts/tags.js';
 
 if(config.APP_ENV!=='test'||config.PGDATABASE!=='ggeujeok_test')throw Error('Requires isolated test database');
 Object.assign(config,{PLATFORM_API_KEY:'test',PLATFORM_PROJECT_ID:randomUUID(),PLATFORM_ENVIRONMENT_ID:randomUUID()});
@@ -72,7 +73,7 @@ test('assistant memory is account scoped, mentions bypass scheduled batch limit,
   const summary=await ai.requestSummary(a,owner);await generated(summary.id,{summary:'루미가 핵심을 요약했어.'});
   await ai.apply(summary.id,()=>{});
   const beforePublish=(await db.query('SELECT ai_summary FROM posts WHERE id=$1',[a])).rows[0];
-  assert.equal(beforePublish.ai_summary,null,'manual generation stays in the editor until publication');
+  assert.equal(beforePublish.ai_summary,'루미가 핵심을 요약했어.','delivery updates the saved post without a second publish');
   const editor=await postService.edit(a);
   await postService.save(a,{version:editor.version,data:{...editor.data,tags:['기록']}});
   assert.equal((await postService.edit(a)).aiSummary,'루미가 핵심을 요약했어.','metadata changes retain a current summary');
@@ -86,20 +87,31 @@ test('assistant memory is account scoped, mentions bypass scheduled batch limit,
   assert.equal(await ai.context(await ai.task(pending.id)),null);
 });
 
-test('tags fill an empty draft without hiding an editor conflict; generated articles stay disclosed drafts in the assigned category',async()=>{
+test('detached tags merge into the correct post and survive stale editor saves; generated articles stay disclosed drafts',async()=>{
   const owner=await user('ai-draft-owner'),p=await post(owner,'태그 없는 글');
+  await db.transaction(tx=>syncTags(tx,p,['공개 수동 태그']));
   const settings=await ai.settings();
   const legacy=(await db.query(`INSERT INTO ai_tasks(kind,post_id,post_version,profile,settings_revision,state)
     VALUES('tags',$1,1,$2,$3,'SUCCEEDED') RETURNING id`,[p,settings.data,settings.revision])).rows[0];
-  const tags=await ai.requestTags(p,owner);
+  const [tags,concurrent]=await Promise.all([ai.requestTags(p,owner),ai.requestTags(p,owner)]);
+  assert.equal(concurrent.id,tags.id,'concurrent button clicks share a task');
   assert.notEqual(tags.id,legacy.id,'legacy published-revision tasks do not collide with manual draft requests');
   assert.equal((await ai.requestTags(p,owner)).id,tags.id,'repeated clicks share the same manual task');
   assert.deepEqual(await ai.status(tags.id),{id:tags.id,state:'PENDING',errorCode:null});
+  const stale=await postService.edit(p);
+  await postService.save(p,{version:stale.version,data:{...stale.data,title:'요청 후 수정',tags:['직접 태그']}});
   await generated(tags.id,{tags:['도커','운영']});await ai.apply(tags.id,()=>{});
   const draft=(await db.query('SELECT version,data FROM post_drafts WHERE post_id=$1',[p])).rows[0];
-  assert.equal(draft.version,2);assert.deepEqual(draft.data.tags,['도커','운영']);
-  assert.equal((await db.query('SELECT count(*)::int AS n FROM post_tags WHERE post_id=$1',[p])).rows[0].n,0);
-  await postService.publish(p,{draftVersion:2,baseVersion:1,status:'PUBLIC'},owner);
+  assert.equal(draft.version,2);assert.deepEqual(draft.data.tags,['직접 태그','도커','운영']);
+  await postService.save(p,{version:2,aiRevision:0,data:{...draft.data,title:'계속 편집',tags:['직접 태그']}});
+  const updated=await postService.edit(p);
+  assert.deepEqual(updated.data.tags,['직접 태그','도커','운영'],'saving a screen that has not seen delivery retains generated tags');
+  await postService.save(p,{version:3,aiRevision:updated.aiRevision,data:{...updated.data,tags:['직접 태그','운영']}});
+  assert.deepEqual((await postService.edit(p)).data.tags,['직접 태그','운영'],'a user can remove a delivered tag after seeing it');
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM post_tags WHERE post_id=$1',[p])).rows[0].n,3,
+    'delivery updates the post tags without publishing the edited title or manual draft tags');
+  assert.equal((await db.query('SELECT title FROM posts WHERE id=$1',[p])).rows[0].title,'태그 없는 글');
+  await postService.publish(p,{draftVersion:4,baseVersion:1,status:'PUBLIC'},owner);
   assert.equal((await db.query("SELECT count(*)::int AS n FROM ai_tasks WHERE post_id=$1 AND kind='summary'",[p])).rows[0].n,0,
     'publishing does not automatically request an AI summary');
   const article=await ai.requestArticle({topic:'요즘 기술',requestId:randomUUID()},owner);
@@ -113,8 +125,10 @@ test('tags fill an empty draft without hiding an editor conflict; generated arti
   const another=await post(owner,'설정 변경 중인 요약');
   const before=await ai.requestSummary(another,owner);
   const current=await ai.settings();await ai.saveSettings({data:{...current.data,tone:'짧은 반말'},revision:current.revision},owner);
-  await ai.apply(before.id,()=>{});assert.equal((await ai.task(before.id)).state,'SKIPPED');
-  const next=await ai.requestSummary(another,owner);assert.notEqual(next.id,before.id,'a new configuration gets a new request UUID');
+  assert.equal((await ai.requestSummary(another,owner)).id,before.id,'an accepted request remains independent of later settings');
+  await generated(before.id,{summary:'요청 당시의 요약'});await ai.apply(before.id,()=>{});
+  assert.equal((await ai.task(before.id)).state,'SUCCEEDED');
+  const next=await ai.requestSummary(another,owner);assert.notEqual(next.id,before.id,'a new button request after completion gets a new task');
 });
 
 test('replying to an AI comment calls the assistant without a keyword; AI article ownership does not',async()=>{
