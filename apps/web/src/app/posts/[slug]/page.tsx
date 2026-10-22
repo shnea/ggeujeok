@@ -32,7 +32,7 @@ export default async function PostPage({ params }: { params: Promise<{ slug: str
   const [related, neighbors, ads] = await Promise.all([
     serverApi<PublicPost[]>(`/api/public/posts/${post.slug}/related`),
     serverApi<{ previous: { slug: string; title: string } | null; next: { slug: string; title: string } | null }>(`/api/public/posts/${post.slug}/neighbors`),
-    adSettings(),
+    adSettings(post.adsEnabled !== false),
   ]);
   const structured = { '@context': 'https://schema.org', '@type': 'BlogPosting', headline: post.title,
     description: post.summary, datePublished: post.publishedAt, dateModified: post.updatedAt,

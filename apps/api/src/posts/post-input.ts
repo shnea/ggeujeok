@@ -9,6 +9,7 @@ export const postInput = z.object({
   summary: z.string().trim().max(500), categoryId: uuid.nullable(),
   thumbnailId: uuid.nullable().default(null),
   commentsEnabled: z.boolean().default(true),
+  adsEnabled: z.boolean().default(true),
   tags: z.array(z.string().trim().min(1).max(80)).max(20), content: z.unknown(),
 }).strict();
 export const saveInput = z.object({ version: z.number().int().positive(), aiRevision:z.number().int().nonnegative().default(0), data: postInput }).strict();
@@ -22,7 +23,7 @@ export const tagSearchInput = z.object({ q: z.string().trim().normalize('NFC').m
 
 export type PostData = Omit<z.infer<typeof postInput>, 'content'> & { content: EditorDocument };
 export const initialPost = (postSlug: string): PostData => ({ title: '제목 없는 글', slug: postSlug,
-  summary: '', categoryId: null, thumbnailId: null, commentsEnabled: true, tags: [], content: emptyDocument() });
+  summary: '', categoryId: null, thumbnailId: null, commentsEnabled: true, adsEnabled: true, tags: [], content: emptyDocument() });
 
 export function validatePost(input: unknown): PostData {
   const data = postInput.parse(input);

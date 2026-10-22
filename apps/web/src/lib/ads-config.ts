@@ -12,7 +12,8 @@ export const hiddenAds: AdSettingsInput = { provider: 'adsense', enabled: false,
   adfit: null, adsense: { clientId: '', postSlot: '', sidebarSlot: '', inlineSlot: '' } };
 
 // Page layout consumes placements; provider-specific validation stays here.
-export function resolveAdSettings(settings: AdSettingsInput) {
+export function resolveAdSettings(settings: AdSettingsInput, adsEnabled = true) {
+  if (!adsEnabled) return { enabled: false, provider: settings.provider, feed: null, post: null, sidebar: null, inline: null };
   const { clientId: client, postSlot, sidebarSlot, inlineSlot } = settings.adsense;
   const validAdFit = (unit: AdFitUnit | undefined) => Boolean(unit?.unitId && /^[A-Za-z0-9_-]{1,128}$/.test(unit.unitId) && adfitSizes.includes(unit.size));
   const enabled = settings.enabled && (settings.provider === 'adsense'

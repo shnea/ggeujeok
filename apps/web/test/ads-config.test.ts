@@ -4,6 +4,18 @@ import { resolveAdSettings, hiddenAds, emptyAdfit, type AdSettingsInput } from '
 
 const adsense = { clientId: 'ca-pub-1234567890123456', postSlot: '123', sidebarSlot: '456', inlineSlot: '789' };
 const adfit = { post: {unitId:'DAN-post',size:'300x250' as const}, sidebar:{unitId:'DAN-side',size:'160x600' as const}, inline:{unitId:'DAN-inline',size:'728x90' as const} };
+
+test('a post can suppress every placement, including placeholders, without overriding the site switch', () => {
+  for (const provider of ['adsense', 'adfit'] as const) {
+    for (const enabled of [true, false]) {
+      const settings: AdSettingsInput = { ...hiddenAds, provider, enabled, showPlaceholders: true, adsense, adfit,
+        feed: { enabled: true, slot: '987', layoutKey: '-ab+cd_12' } };
+      assert.deepEqual(resolveAdSettings(settings, false), { enabled: false, provider, feed: null, post: null, sidebar: null, inline: null });
+      assert.ok(resolveAdSettings(settings, true).post, 'Other posts retain the site setting');
+    }
+  }
+  assert.equal(resolveAdSettings(hiddenAds, true).post, null, 'A post cannot enable globally disabled ads');
+});
 test('hidden and placeholder modes never return live ad units', () => {
   assert.deepEqual(resolveAdSettings(hiddenAds), {enabled:false,provider:'adsense',post:null,sidebar:null,inline:null,feed:null});
   const preview = resolveAdSettings({...hiddenAds,showPlaceholders:true});

@@ -20,6 +20,9 @@ test('normalizes duplicate tags and rejects invalid slugs, oversized content and
   assert.throws(() => validatePost({ ...data, slug: '../admin' }));
   assert.throws(() => validatePost({ ...data, content: { ...emptyDocument(), version: 2 } }));
   assert.throws(() => validatePost({ ...data, content: { ...emptyDocument(), huge: 'x'.repeat(2 * 1024 * 1024) } }));
+  assert.equal(validatePost({ ...data, adsEnabled: undefined }).adsEnabled, true, 'Older inputs retain the default');
+  assert.equal(validatePost({ ...data, adsEnabled: false }).adsEnabled, false);
+  assert.throws(() => validatePost({ ...data, adsEnabled: 'false' }));
 });
 
 test('return paths cannot send an authenticated browser to another origin', () => {

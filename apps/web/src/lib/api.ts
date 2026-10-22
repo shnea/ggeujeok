@@ -17,7 +17,7 @@ export type Session = { configured: boolean; user: { id: string; name: string; n
 export type Category = { id: string; name: string; slug: string; sortOrder: number };
 export type AiIdentity = { name: string; imageUrl: string | null };
 export type PublicPost = { aiGenerated?: boolean; aiIdentity?: AiIdentity | null; aiSummary?: boolean; aiSummaryIdentity?: AiIdentity | null; id: string; slug: string; title: string; summary: string; publishedAt: string; updatedAt: string;
-  categoryName: string; categorySlug: string; thumbnailId: string | null; tags: { name: string; slug: string }[]; content?: EditorDocument };
+  categoryName: string; categorySlug: string; thumbnailId: string | null; tags: { name: string; slug: string }[]; content?: EditorDocument; adsEnabled?: boolean };
 export type PostList = { items: PublicPost[]; total: number; page: number };
 export function mutation(method: string, csrf: string, body?: unknown): RequestInit {
   return { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: body === undefined ? undefined : JSON.stringify(body) };

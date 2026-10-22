@@ -37,7 +37,7 @@ export class Posts {
   }
 
   async publicPost(slug: string) {
-    const result = await this.db.query(`SELECT ${publicColumns},p.content FROM posts p
+    const result = await this.db.query(`SELECT ${publicColumns},p.content,p.ads_enabled AS "adsEnabled" FROM posts p
       LEFT JOIN categories c ON c.id=p.category_id WHERE p.slug=$1 AND p.status='PUBLIC'`, [slug]);
     if (!result.rows[0]) throw new NotFoundException('글을 찾을 수 없습니다.');
     return result.rows[0];
@@ -169,9 +169,9 @@ export class Posts {
       const images = await syncImageReferences(tx, id, data.content, 'PUBLISHED', data.thumbnailId);
       if (expected.status === 'PUBLIC' && ((!text && !images.length) || !data.categoryId)) throw new BadRequestException('공개하려면 본문과 카테고리가 필요합니다.');
       if (post.published_at && post.slug !== data.slug) throw new BadRequestException('최초 공개 후에는 주소를 바꿀 수 없습니다.');
-      const result = await tx.query(`UPDATE posts SET title=$2,slug=$3,summary=$4,content=$5,content_text=$6,category_id=$7,status=$8,thumbnail_id=$9,comments_enabled=$10,
+      const result = await tx.query(`UPDATE posts SET title=$2,slug=$3,summary=$4,content=$5,content_text=$6,category_id=$7,status=$8,thumbnail_id=$9,comments_enabled=$10,ads_enabled=$11,
         published_at=CASE WHEN $8='PUBLIC' THEN COALESCE(published_at,now()) ELSE published_at END,version=version+1,updated_at=now()
-        WHERE id=$1 RETURNING version`, [id, data.title, data.slug, data.summary, data.content, text, data.categoryId, expected.status, data.thumbnailId, data.commentsEnabled]);
+        WHERE id=$1 RETURNING version`, [id, data.title, data.slug, data.summary, data.content, text, data.categoryId, expected.status, data.thumbnailId, data.commentsEnabled,data.adsEnabled]);
       const changed = !post.published_at || !isDeepStrictEqual(post.content,data.content) || post.title !== data.title;
       if (!data.summary && post.draft_ai_summary)
         await tx.query('UPDATE posts SET ai_summary=$2,ai_summary_version=version,ai_summary_identity=$3 WHERE id=$1',

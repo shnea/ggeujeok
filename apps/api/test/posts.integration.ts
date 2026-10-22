@@ -76,6 +76,7 @@ test('draft isolation, conflicts, publication dates, private visibility and auth
   assert.equal((await posts.publicPost(data.slug)).publishedAt.toISOString(), publicPost.publishedAt.toISOString());
   await verifyCategories(admin, user);
   await verifyTags(admin, user);
+  await verifyPostAds(admin, user, id);
   await db.query("UPDATE sessions SET last_seen_at=now()-interval '25 hours' WHERE token_hash=$1", [admin.hash]);
   assert.equal((await fetch(`${origin}/api/admin/posts`, { headers: { Cookie: admin.cookie } })).status, 401);
   await db.query("UPDATE sessions SET last_seen_at=now(),created_at=now()-interval '8 days' WHERE token_hash=$1", [admin.hash]);
@@ -115,6 +116,39 @@ async function verifyTags(admin: Awaited<ReturnType<typeof account>>, reader: Aw
   assert.deepEqual(await search('한글'), [], 'Deleted draft-only tags disappear');
   assert.deepEqual(await search('école'), [{ name: 'ÉCOLE' }], 'Catalog tags remain reusable');
   await db.query("DELETE FROM tags WHERE slug='tag-search-ecole'");
+}
+
+async function verifyPostAds(admin: Awaited<ReturnType<typeof account>>, reader: Awaited<ReturnType<typeof account>>, id: string) {
+  const draft = await posts.edit(id);
+  assert.equal(draft.data.adsEnabled, true);
+  const publicPath = `${origin}/api/public/posts/${draft.data.slug}`;
+  const publicAdsEnabled = async () => {
+    const response = await fetch(publicPath);
+    assert.equal(response.status, 200);
+    return (await response.json() as { adsEnabled: boolean }).adsEnabled;
+  };
+  assert.equal(await publicAdsEnabled(), true);
+  const savePath = `${origin}/api/admin/posts/${id}/draft`;
+  const input = { version: draft.version, data: { ...draft.data, adsEnabled: false } };
+  const headers = { Origin: config.SITE_URL, 'Content-Type': 'application/json' };
+  assert.equal((await fetch(savePath, { method: 'PUT', headers, body: JSON.stringify(input) })).status, 401);
+  assert.equal((await fetch(savePath, { method: 'PUT', headers: { ...headers, Cookie: reader.cookie, 'X-CSRF-Token': reader.csrf }, body: JSON.stringify(input) })).status, 403);
+  assert.equal((await fetch(savePath, { method: 'PUT', headers: { ...headers, Cookie: admin.cookie }, body: JSON.stringify(input) })).status, 403);
+  const adminHeaders = { ...headers, Cookie: admin.cookie, 'X-CSRF-Token': admin.csrf };
+  const savedResponse = await fetch(savePath, { method: 'PUT', headers: adminHeaders, body: JSON.stringify(input) });
+  assert.equal(savedResponse.status, 200);
+  const saved = await savedResponse.json() as { version: number };
+  assert.equal((await posts.edit(id)).data.adsEnabled, false, 'The setting survives reloading the draft');
+  assert.equal(await publicAdsEnabled(), true, 'Autosave must not change the public setting');
+  const publishResponse = await fetch(`${origin}/api/admin/posts/${id}/publish`, { method: 'POST', headers: adminHeaders,
+    body: JSON.stringify({ draftVersion: saved.version, baseVersion: draft.baseVersion, status: 'PUBLIC' }) });
+  assert.equal(publishResponse.status, 201);
+  const published = await publishResponse.json() as { version: number; baseVersion: number };
+  assert.equal(await publicAdsEnabled(), false);
+  const reopened = await posts.save(id, { version: published.version, data: { ...draft.data, adsEnabled: true } });
+  assert.equal(await publicAdsEnabled(), false);
+  await posts.publish(id, { draftVersion: reopened.version, baseVersion: published.baseVersion, status: 'PUBLIC' }, admin.id);
+  assert.equal(await publicAdsEnabled(), true);
 }
 
 async function verifyCategories(admin: Awaited<ReturnType<typeof account>>, reader: Awaited<ReturnType<typeof account>>) {

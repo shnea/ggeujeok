@@ -94,6 +94,8 @@ function Editor({ initial, csrf, categories }: { initial: Draft; csrf: string; c
         <button type="button" className="secondary" disabled={blocked||aiBusy} onClick={()=>void requestText('tags')}><Bot aria-hidden="true" />{aiBusy?'접수 중…':'AI 태그 생성'}</button>
         <label className="setting-toggle"><span><strong>댓글 허용</strong><small>끄면 새 댓글·답글을 받지 않습니다. 기존 댓글은 남습니다.</small></span>
           <input type="checkbox" role="switch" checked={data.commentsEnabled ?? true} onChange={event => change({ commentsEnabled: event.target.checked })} /></label>
+        <label className="setting-toggle"><span><strong>광고 표시</strong><small>끄면 이 글의 모든 광고와 광고 자리를 숨깁니다. 공개본에 반영하면 적용됩니다.</small></span>
+          <input type="checkbox" role="switch" checked={data.adsEnabled ?? true} onChange={event => change({ adsEnabled: event.target.checked })} /></label>
       </fieldset><div className="settings-bottom"><p className="field-help">이미지: JPEG·PNG·WebP·GIF, 파일당 최대 20MiB.</p><button className="secondary" disabled={blocked || coverUploading} onClick={() => publish('PRIVATE')}><LockKeyhole aria-hidden="true" />비공개로 저장</button>
         <button className="text-button danger" disabled={blocked || coverUploading} onClick={remove}><Trash2 aria-hidden="true" />글 삭제</button></div></aside></div>}
   </div>;

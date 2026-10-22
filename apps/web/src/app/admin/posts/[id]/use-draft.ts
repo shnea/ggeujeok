@@ -4,7 +4,7 @@ import type { EditorDocument } from '@shnea/editor';
 import { api, ApiError, mutation } from '@/lib/api';
 import { mergeAiTags } from './ai-tags';
 
-export type DraftData = { title: string; slug: string; summary: string; categoryId: string | null; thumbnailId?: string | null; commentsEnabled?: boolean; tags: string[]; content: EditorDocument };
+export type DraftData = { title: string; slug: string; summary: string; categoryId: string | null; thumbnailId?: string | null; commentsEnabled?: boolean; adsEnabled?: boolean; tags: string[]; content: EditorDocument };
 export type Draft = { aiGenerated?: boolean; aiIdentity?: {name:string}; aiSummary?: string|null; aiTags?:string[]; aiRevision?:number; id: string; data: DraftData; version: number; baseVersion: number; postVersion: number; status: string; publishedAt: string | null };
 export function useDraft(initial: Draft, csrf: string) {
   const [draft, setDraft] = useState(initial);

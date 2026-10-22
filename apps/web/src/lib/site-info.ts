@@ -9,7 +9,8 @@ export async function getSiteInfo() {
   return { name: site.name, description: site.description, imageUrl: site.imageUrl, operator: site.operatorName, email: site.contactEmail, policyDate: '2026-09-28' };
 }
 
-export async function adSettings() {
+export async function adSettings(adsEnabled = true) {
+  if (!adsEnabled) return resolveAdSettings(hiddenAds, false);
   try {
     return resolveAdSettings(await serverApi<AdSettingsInput>('/api/public/settings/ads'));
   } catch {
