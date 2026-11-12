@@ -165,14 +165,21 @@ test('cover selection, automatic fallback, draft isolation and file access follo
   const session: Session = { userId: owner, name: 'test', isAdmin: true, csrfToken: '', data: {} };
   const { id } = await posts.create(owner), other = await posts.create(owner);
   const png = await sharp({ create: { width: 16, height: 8, channels: 3, background: '#118833' } }).png().toBuffer();
-  async function upload(postId: string) {
+  async function upload(postId: string, access:string|{assistantPostId:string}=owner) {
     const platform = new FileServer(); platform.loseChunkResponse = false;
     const images = new Images(db, platform), requestId = randomUUID();
-    await images.start(postId, owner, { requestId, name: 'cover.png', size: png.length, sha256: hash(png) });
-    await images.chunk(requestId, owner, 0, png);
-    return (await images.complete(requestId, owner)).fileId!;
+    const input = { requestId, name: 'cover.png', size: png.length, sha256: hash(png) };
+    await images.start(postId,access,input);
+    if (typeof access==='string') await assert.rejects(images.start(postId,{assistantPostId:postId},input),{status:404});
+    else {
+      await assert.rejects(images.start(postId,owner,input),{status:404});
+      await assert.rejects(images.chunk(requestId,{assistantPostId:other.id},0,png),{status:404});
+      await assert.rejects(images.complete(requestId,owner),{status:404});
+    }
+    await images.chunk(requestId,access,0,png);
+    return (await images.complete(requestId,access)).fileId!;
   }
-  const a = await upload(id), b = await upload(id), foreign = await upload(other.id);
+  const a = await upload(id), b = await upload(id,{assistantPostId:id}), foreign = await upload(other.id);
   const images = new Images(db, new FileServer()), draft = await posts.edit(id);
   const image = (fileId: string) => ({ type: 'attachment', attrs: { id: randomUUID(), scope: id, fileId, kind: 'image', name: 'cover.png', size: png.length } });
   const data = { ...draft.data, title: '대표 이미지 검증', categoryId: (await posts.categories())[0].id,
@@ -187,7 +194,9 @@ test('cover selection, automatic fallback, draft isolation and file access follo
   assert.equal(await posts.publicImage(data.slug), a);
   assert.equal((await posts.list({ q: '대표 이미지 검증' })).items.find(row => row.id === id)?.thumbnailId, a);
 
-  const chosen = await posts.save(id, { version: state.version, data: { ...data, thumbnailId: b } });
+  const actor = {issuerId:owner,keyId:randomUUID(),identity:{name:'루미',imageUrl:null,source:'mcp' as const}};
+  await assert.rejects(posts.updateForAssistant(id,{version:state.version,changes:{thumbnailId:foreign}},actor),{status:400});
+  const chosen = await posts.updateForAssistant(id,{version:state.version,changes:{thumbnailId:b}},actor);
   assert.equal(await posts.publicImage(data.slug), a, 'Draft cover must not change public metadata');
   await assert.rejects(images.accessible(b, null), { status: 404 });
   await images.accessible(b, session);

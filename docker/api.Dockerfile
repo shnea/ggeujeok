@@ -3,9 +3,11 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
+COPY tools/mcp/package.json tools/mcp/package.json
 COPY vendor vendor
 RUN npm ci --workspace @ggeujeok/api --include-workspace-root
 COPY apps/api apps/api
+COPY tools/mcp tools/mcp
 RUN npm run build --workspace @ggeujeok/api
 
 FROM build AS development
@@ -23,6 +25,7 @@ COPY --from=pruned /app/node_modules node_modules
 COPY --from=build /app/apps/api/package.json apps/api/package.json
 COPY --from=build /app/apps/api/dist apps/api/dist
 COPY --from=build /app/apps/api/migrations apps/api/migrations
+COPY --from=build /app/tools/mcp/package.json /app/tools/mcp/tools.mjs tools/mcp/
 RUN mkdir -p /app/uploads && chown node:node /app/uploads
 USER node
 CMD ["node", "apps/api/dist/main.js"]

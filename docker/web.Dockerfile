@@ -4,6 +4,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
+COPY tools/mcp/package.json tools/mcp/package.json
 COPY vendor vendor
 RUN npm ci --workspace @ggeujeok/web --include-workspace-root
 COPY apps/web apps/web

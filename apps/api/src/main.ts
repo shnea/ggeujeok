@@ -14,6 +14,7 @@ import { PostsController, AdminPostsController, AdminTagsController } from './po
 import { Posts } from './posts/posts.service.js';
 import { AssistantGuard, AssistantKeysController } from './automation/assistant-access.js';
 import { AssistantController } from './automation/assistant.controller.js';
+import { McpController } from './automation/mcp.controller.js';
 import { AdminImagesController, ImagesController } from './files/images.controller.js';
 import { Images } from './files/images.service.js';
 import { PlatformFiles } from './files/platform-files.js';
@@ -39,7 +40,7 @@ class HealthController {
   @Get('health') async health() { await this.db.query('SELECT 1'); return { status: 'ok' }; }
 }
 
-@Module({ imports: [DatabaseModule], controllers: [AdminAiController, AiCacheController, HealthController, AuthController, PostsController, AdminPostsController, AdminTagsController, AssistantKeysController, AssistantController, AdminImagesController, ImagesController, CategoriesController, ActivityController, PublicActivityController, GuestActivityController, AdminCommentsController, MeController, AdminAdSettingsController, PublicAdSettingsController, AdminSiteSettingsController, PublicSiteSettingsController, AdminVisitsController, PublicVisitsController],
+@Module({ imports: [DatabaseModule], controllers: [AdminAiController, AiCacheController, HealthController, AuthController, PostsController, AdminPostsController, AdminTagsController, AssistantKeysController, AssistantController, McpController, AdminImagesController, ImagesController, CategoriesController, ActivityController, PublicActivityController, GuestActivityController, AdminCommentsController, MeController, AdminAdSettingsController, PublicAdSettingsController, AdminSiteSettingsController, PublicSiteSettingsController, AdminVisitsController, PublicVisitsController],
   providers: [Ai, Sessions, AdminGuard, UserGuard, AssistantGuard, Posts, Images, PlatformFiles, Categories, Activity, Captchas, Notifications, MyActivity, AdSettings, SiteSettings, Visits, { provide: OperationalLogs, useValue: logs }] })
 class AppModule {}
 
@@ -53,6 +54,7 @@ app.use((request: AuthRequest, response: import('express').Response, next: () =>
   requestContext.run({ requestId: request.requestId }, next);
 });
 app.use('/api/admin/uploads', raw({ type: 'application/octet-stream', limit: '4mb' }));
+app.use('/api/automation/assistant', raw({ type: 'application/octet-stream', limit: '4mb' }));
 app.use(json({ limit: '2200kb' }));
 app.useGlobalFilters(new Errors());
 app.enableShutdownHooks();

@@ -13,6 +13,7 @@ import type { Session } from '../auth/sessions.js';
 import type { AttachmentViews } from '@shnea/editor';
 
 export const chunkBytes = 4 * 1024 * 1024;
+export const uploadOffset = z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(0).max(20 * 1024 * 1024));
 export const imageVariant = z.enum(['thumbnail', 'preview', 'original', 'download']);
 const safeImageTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 export const uploadInput = z.object({ requestId: z.uuid(), name: z.string().trim().min(1).max(255),
@@ -20,6 +21,8 @@ export const uploadInput = z.object({ requestId: z.uuid(), name: z.string().trim
 type Upload = { id: string; post_id: string | null; owner_id: string; project_id: string; environment_id: string;
   credential_hash: string; original_name: string; size: number; sha256: string; received: number;
   media_type: string | null; file_id: string | null; deleting_at?: Date | null };
+// Browser uploads use the post author's session. Assistant uploads are scoped to the authorized post and a separate upload namespace.
+type UploadAccess = string | {assistantPostId:string};
 const digest = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
 
 @Injectable()
@@ -28,23 +31,27 @@ export class Images {
   private diskPath(id: string) { return path.join(config.UPLOAD_DIRECTORY, `${z.uuid().parse(id)}.upload`); }
   private status(row: Upload) { return { id: row.id, received: row.received, size: row.size, fileId: row.file_id, name: row.original_name, chunkBytes }; }
 
-  async start(postId: string, ownerId: string, input: unknown) {
+  async start(postId: string, access: UploadAccess, input: unknown) {
     const data = uploadInput.parse(input);
+    const assistant = typeof access!=='string';
+    if (assistant && access.assistantPostId!==postId) throw new NotFoundException();
     await this.platform.checkEnvironment();
     return this.db.transaction(async tx => {
-      const post = await tx.query('SELECT id FROM posts WHERE id=$1 AND author_id=$2 FOR UPDATE', [postId, ownerId]);
-      if (!post.rowCount) throw new NotFoundException();
-      await tx.query(`INSERT INTO image_uploads(id,post_id,owner_id,project_id,environment_id,credential_hash,original_name,size,sha256)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO NOTHING`,
-      [data.requestId, postId, ownerId, config.PLATFORM_PROJECT_ID, config.PLATFORM_ENVIRONMENT_ID, digest(config.PLATFORM_API_KEY), data.name, data.size, data.sha256]);
-      const row = await this.owned(tx, data.requestId, ownerId);
+      const {rows:[post]} = await tx.query('SELECT author_id FROM posts WHERE id=$1 AND ($2::uuid IS NULL OR author_id=$2) FOR UPDATE', [postId,assistant?null:access]);
+      if (!post) throw new NotFoundException();
+      await tx.query(`INSERT INTO image_uploads(id,post_id,owner_id,project_id,environment_id,credential_hash,original_name,size,sha256,assistant_managed)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO NOTHING`,
+      [data.requestId, postId, post.author_id, config.PLATFORM_PROJECT_ID, config.PLATFORM_ENVIRONMENT_ID, digest(config.PLATFORM_API_KEY), data.name, data.size, data.sha256,assistant]);
+      const row = await this.owned(tx, data.requestId, access);
       if (row.post_id !== postId || row.sha256 !== data.sha256 || row.size !== data.size || row.original_name !== data.name) throw new ConflictException('업로드 요청 ID에 다른 파일이 연결돼 있습니다. 새로 추가해 주세요.');
       return this.status(row);
     });
   }
 
-  private async owned(tx: PoolClient, id: string, ownerId: string) {
-    const result = await tx.query<Upload>('SELECT * FROM image_uploads WHERE id=$1 AND owner_id=$2 FOR UPDATE', [id, ownerId]);
+  private async owned(tx: PoolClient, id: string, access: UploadAccess) {
+    const result = typeof access==='string'
+      ? await tx.query<Upload>('SELECT * FROM image_uploads WHERE id=$1 AND owner_id=$2 AND NOT assistant_managed FOR UPDATE',[id,access])
+      : await tx.query<Upload>('SELECT * FROM image_uploads WHERE id=$1 AND post_id=$2 AND assistant_managed FOR UPDATE',[id,access.assistantPostId]);
     const row = result.rows[0];
     if (row?.deleting_at) throw new ConflictException('보존 기간이 지난 이미지입니다. 새로 추가해 주세요.');
     if (!row?.post_id || row.project_id !== config.PLATFORM_PROJECT_ID || row.environment_id !== config.PLATFORM_ENVIRONMENT_ID) throw new NotFoundException();
@@ -52,10 +59,10 @@ export class Images {
     return row;
   }
 
-  async chunk(id: string, ownerId: string, offset: number, bytes: Buffer) {
+  async chunk(id: string, access: UploadAccess, offset: number, bytes: Buffer) {
     if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > chunkBytes) throw new BadRequestException('이미지 조각 크기를 확인해 주세요.');
     return this.db.transaction(async tx => {
-      const row = await this.owned(tx, id, ownerId);
+      const row = await this.owned(tx, id, access);
       if (row.file_id || row.received !== offset) throw new ConflictException('업로드 위치가 바뀌었습니다. 다시 시도하면 이어서 전송합니다.');
       if (offset + bytes.length > row.size) throw new BadRequestException('신고한 파일 크기를 초과했습니다.');
       await mkdir(config.UPLOAD_DIRECTORY, { recursive: true });
@@ -77,10 +84,10 @@ export class Images {
     });
   }
 
-  async complete(id: string, ownerId: string) {
+  async complete(id: string, access: UploadAccess) {
     await this.platform.checkEnvironment();
     const result = await this.db.transaction(async tx => {
-      const row = await this.owned(tx, id, ownerId);
+      const row = await this.owned(tx, id, access);
       if (row.file_id) return this.status(row);
       if (row.received !== row.size) throw new ConflictException('이미지 전송이 아직 끝나지 않았습니다.');
       const source = this.diskPath(id), hash = createHash('sha256');

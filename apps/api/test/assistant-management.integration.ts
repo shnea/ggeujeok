@@ -1,17 +1,20 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
 import type { Response } from 'express';
 import { Database } from '../src/database/database.js';
 import { config } from '../src/config.js';
 import { Sessions } from '../src/auth/sessions.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 if (config.APP_ENV!=='test' || config.PGDATABASE!=='ggeujeok_test') throw new Error('Requires isolated DB');
 const db = new Database(), origin = 'http://127.0.0.1:30108';
 const server = spawn(process.execPath,['dist/main.js'],{env:{...process.env,PORT:'30108'},stdio:'ignore'});
 after(async()=>{server.kill('SIGTERM');await db.end();});
 const automation = '/api/automation/assistant', keys = '/api/admin/settings/assistant-keys';
+const hash = (value:string|Buffer)=>createHash('sha256').update(value).digest('hex');
 
 async function request(path:string,status:number,method='GET',headers:Record<string,string>={},body?:unknown) {
   const response = await fetch(origin+path,{method,headers:{...headers,...(body===undefined?{}:{'Content-Type':'application/json'})},
@@ -44,6 +47,7 @@ test('assistant key scope, attribution, protected writes, recent summaries and r
   const adminId = oldAdmin?.id ?? await addUser(config.ADMIN_OIDC_SUBJECT), visitorId = await addUser(`${prefix}-visitor`);
   const admin = await session(adminId), visitor = await session(visitorId);
   const issued:string[] = [];
+  const uploads:string[] = [];
   const issue = async (name:string,scope:Record<string,boolean>={}) => {
     const result = await request(keys,201,'POST',admin,{name,...scope});
     assert.match(result.token,/^ggm_[A-Za-z0-9_-]{43}$/);
@@ -52,6 +56,8 @@ test('assistant key scope, attribution, protected writes, recent summaries and r
   };
   const draft = (id:string,auth:Record<string,string>) => request(`${automation}/posts/${id}`,200,'GET',auth);
   const publish = (post:any,auth:Record<string,string>,status=201) => request(`${automation}/posts/${post.id}/publish`,status,'POST',auth,
+    {draftVersion:post.version,baseVersion:post.baseVersion});
+  const unpublish = (post:any,auth:Record<string,string>,status=201) => request(`${automation}/posts/${post.id}/unpublish`,status,'POST',auth,
     {draftVersion:post.version,baseVersion:post.baseVersion});
 
   try {
@@ -66,6 +72,36 @@ test('assistant key scope, attribution, protected writes, recent summaries and r
     await request('/api/admin/posts',401,'GET',full.auth);
     await request(`${automation}/posts`,401,'GET',admin);
     assert.deepEqual((await request(`${automation}/capabilities`,200,'GET',read.auth)).write,false);
+    const probe = {jsonrpc:'2.0',id:1,method:'tools/list'};
+    const accept = {Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2025-11-25'};
+    await request('/api/mcp',401,'POST',accept,probe);
+    await request('/api/mcp',403,'POST',{...accept,...read.auth,Origin:'https://untrusted.test'},probe);
+    // fetch replaces Host with the URL authority. A raw HTTP request tests the actual header received by the server.
+    const hostStatus = await new Promise<number|undefined>((resolve,reject)=>{
+      const body=JSON.stringify(probe);
+      const req=httpRequest(origin+'/api/mcp',{method:'POST',headers:{...accept,...read.auth,Host:'untrusted.test',
+        'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)}},res=>{res.resume();resolve(res.statusCode);});
+      req.on('error',reject); req.end(body);
+    });
+    assert.equal(hostStatus,403);
+    const legacy = await fetch(origin+'/api/mcp',{method:'POST',headers:{...accept,...read.auth,'Content-Type':'application/json'},body:JSON.stringify(probe)});
+    assert.equal(legacy.status,200);
+    assert.match(await legacy.text(),/"name":"list_posts"/);
+    const remote = new Client({name:'assistant-integration',version:'1.0.0'});
+    const transport = new StreamableHTTPClientTransport(new URL(origin+'/api/mcp'),{requestInit:{headers:read.auth}});
+    try {
+      await remote.connect(transport);
+      const {tools} = await remote.listTools();
+      for (const name of ['list_posts','start_image_upload','upload_image_chunk','complete_image_upload','unpublish_post','delete_comment']) {
+        assert.ok(tools.some(tool=>tool.name===name),name);
+      }
+      const caps = await remote.callTool({name:'get_capabilities',arguments:{}});
+      assert.ok(!caps.isError);
+      assert.match(JSON.stringify(caps.content),/write.*false/);
+      const refused = await remote.callTool({name:'delete_post',arguments:{postId:randomUUID()}});
+      assert.equal(refused.isError,true);
+      assert.match(JSON.stringify(refused.content),/HTTP 403/);
+    } finally { await remote.close(); }
 
     const input = {requestId:prefix,slug:prefix,title:'루미 검증 글',summary:'최근 글 요약',markdown:'# 검증\n\n첫 글의 본문입니다.'};
     await request(`${automation}/posts`,403,'POST',read.auth,input);
@@ -78,6 +114,18 @@ test('assistant key scope, attribution, protected writes, recent summaries and r
     assert.equal(original.data.categoryId,list.find((item:any)=>item.slug==='lumi-view').id);
     assert.equal(original.aiGenerated,true);
     assert.equal(original.aiIdentity.source,'mcp');
+    const uploadId = randomUUID(), imageBytes = Buffer.from([1,2,3]);
+    uploads.push(uploadId);
+    await db.query(`INSERT INTO image_uploads(id,post_id,owner_id,project_id,environment_id,credential_hash,original_name,size,sha256,assistant_managed)
+      VALUES($1,$2,$3,$4,$5,$6,'remote.png',$7,$8,true)`,[uploadId,first.id,adminId,config.PLATFORM_PROJECT_ID,config.PLATFORM_ENVIRONMENT_ID,
+      hash(config.PLATFORM_API_KEY),imageBytes.length,hash(imageBytes)]);
+    const writable = new Client({name:'assistant-upload-integration',version:'1.0.0'});
+    try {
+      await writable.connect(new StreamableHTTPClientTransport(new URL(origin+'/api/mcp'),{requestInit:{headers:write.auth}}));
+      const chunk = await writable.callTool({name:'upload_image_chunk',arguments:{postId:first.id,uploadId,offset:0,data:imageBytes.toString('base64')}});
+      assert.equal(chunk.isError,undefined);
+      assert.match(JSON.stringify(chunk.content),/received.*3/);
+    } finally { await writable.close(); }
     assert.equal((await request(`${automation}/posts?q=${prefix}`,200,'GET',read.auth)).items.length,0);
     await publish(original,write.auth,403);
     await request(`${automation}/posts/${first.id}`,403,'DELETE',write.auth);
@@ -91,10 +139,18 @@ test('assistant key scope, attribution, protected writes, recent summaries and r
     const revised = await draft(first.id,write.auth);
     assert.deepEqual(revised.data.content,current.data.content);
     assert.equal((await request(`/api/public/posts/${prefix}`,200)).title,input.title);
-    await request(`${automation}/posts/${first.id}/review-request`,201,'POST',write.auth,{version:revised.version,sourceUrl:'https://example.test/source'});
+    await unpublish(revised,write.auth,403);
+    await unpublish(current,full.auth,409);
+    await unpublish(revised,full.auth);
+    await request(`/api/public/posts/${prefix}`,404);
+    assert.equal((await db.query('SELECT title FROM posts WHERE id=$1',[first.id])).rows[0].title,input.title);
+    assert.equal((await draft(first.id,write.auth)).data.title,'제목만 수정');
+    await publish(await draft(first.id,write.auth),full.auth);
+    const reviewed = await draft(first.id,write.auth);
+    await request(`${automation}/posts/${first.id}/review-request`,201,'POST',write.auth,{version:reviewed.version,sourceUrl:'https://example.test/source'});
     const candidates = await request(`${automation}/posts/review-candidates`,200,'GET',read.auth);
     assert.equal(candidates.items.find((item:any)=>item.id===first.id).sourceUrl,'https://example.test/source');
-    await request(`${automation}/posts/${first.id}/review-complete`,201,'POST',write.auth,{version:revised.version});
+    await request(`${automation}/posts/${first.id}/review-complete`,201,'POST',write.auth,{version:reviewed.version});
     assert.ok(!(await request(`${automation}/posts/review-candidates`,200,'GET',read.auth)).items.some((item:any)=>item.id===first.id));
 
     const postPath = `/api/posts/${first.id}/comments`, assistantComments = `${automation}/posts/${first.id}/comments`;
@@ -127,6 +183,7 @@ test('assistant key scope, attribution, protected writes, recent summaries and r
       assert.equal(editable.data.adsEnabled,false);
       await publish(editable,full.auth);
       const published = await draft(id,write.auth);
+      await unpublish(published,full.auth,403);
       await request(`/api/admin/posts/${id}/publish`,403,'POST',admin,{draftVersion:published.version,baseVersion:published.baseVersion,status:'PRIVATE'});
       await request(`/api/admin/posts/${id}`,403,'DELETE',admin);
       await request(`${automation}/categories/${category.id}`,403,'PUT',write.auth,{name:`검증 ${slug}`,slug:`${prefix}-renamed`,sortOrder:0});
@@ -153,6 +210,7 @@ test('assistant key scope, attribution, protected writes, recent summaries and r
     await request(`${automation}/posts`,401,'GET',write.auth);
   } finally {
     await db.query('DELETE FROM posts WHERE starts_with(slug,$1)',[prefix]);
+    await db.query('DELETE FROM image_uploads WHERE id=ANY($1::uuid[])',[uploads]);
     await db.query('DELETE FROM categories WHERE id=ANY($1::uuid[])',[categoryIds]);
     await db.query('DELETE FROM assistant_keys WHERE id=ANY($1::uuid[])',[issued]);
     await db.query('DELETE FROM assistant_post_requests WHERE starts_with(id,$1)',[prefix]);

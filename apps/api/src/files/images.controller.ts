@@ -5,7 +5,7 @@ import { pipeline } from 'node:stream/promises';
 import { z } from 'zod';
 import { Sessions } from '../auth/sessions.js';
 import { AdminGuard, type AuthRequest } from '../http.js';
-import { Images } from './images.service.js';
+import { Images, uploadOffset } from './images.service.js';
 import { Posts } from '../posts/posts.service.js';
 import { slug } from '../posts/post-input.js';
 import type { Session } from '../auth/sessions.js';
@@ -19,7 +19,7 @@ export class AdminImagesController {
     return this.images.start(z.uuid().parse(id), request.session!.userId!, input);
   }
   @Patch('uploads/:id') chunk(@Param('id') id: string, @Headers('upload-offset') offset: string, @Body() input: Buffer, @Req() request: AuthRequest) {
-    const position = z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(0).max(20 * 1024 * 1024)).parse(offset);
+    const position = uploadOffset.parse(offset);
     return this.images.chunk(z.uuid().parse(id), request.session!.userId!, position, input);
   }
   @Post('uploads/:id/complete') complete(@Param('id') id: string, @Req() request: AuthRequest) {

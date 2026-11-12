@@ -1,16 +1,18 @@
-import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Inject, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { Activity } from '../activity/activity.service.js';
 import { publishInput, uuid } from '../posts/post-input.js';
 import { Posts } from '../posts/posts.service.js';
 import { Categories } from '../posts/categories.service.js';
 import { isProtectedCategory } from '../posts/protected-categories.js';
+import { Images, uploadOffset } from '../files/images.service.js';
 import { AssistantGuard, AssistantPermission, type AssistantRequest } from './assistant-access.js';
 
 @Controller('api/automation/assistant')
 @UseGuards(AssistantGuard)
 export class AssistantController {
   constructor(@Inject(Posts) private readonly posts: Posts, @Inject(Activity) private readonly activity: Activity,
-    @Inject(Categories) private readonly categories: Categories) {}
+    @Inject(Categories) private readonly categories: Categories,@Inject(Images) private readonly images:Images) {}
 
   @Get('capabilities') capabilities(@Req() request: AssistantRequest) {
     return {identity:request.assistant.identity,...request.assistantPermissions};
@@ -39,6 +41,27 @@ export class AssistantController {
   publish(@Param('id') id:string,@Body() raw:unknown,@Req() request:AssistantRequest) {
     const versions = publishInput.omit({status:true}).parse(raw);
     return this.posts.publish(uuid.parse(id),{...versions,status:'PUBLIC'},request.assistant);
+  }
+
+  @Post('posts/:id/unpublish') @AssistantPermission('publish')
+  unpublish(@Param('id') id:string,@Body() raw:unknown,@Req() request:AssistantRequest) {
+    return this.posts.unpublishForAssistant(uuid.parse(id),raw,request.assistant);
+  }
+
+  @Post('posts/:id/uploads') startUpload(@Param('id') id:string,@Body() raw:unknown) {
+    const postId = uuid.parse(id);
+    return this.images.start(postId,{assistantPostId:postId},raw);
+  }
+
+  @Patch('posts/:postId/uploads/:id') uploadChunk(@Param('postId') postId:string,@Param('id') id:string,
+    @Headers('upload-offset') offset:string,@Body() bytes:Buffer) {
+    return this.images.chunk(uuid.parse(id),{assistantPostId:uuid.parse(postId)},uploadOffset.parse(offset),bytes);
+  }
+
+  @Post('posts/:postId/uploads/:id/complete') async completeUpload(@Param('postId') raw:string,@Param('id') id:string) {
+    const postId = uuid.parse(raw), result = await this.images.complete(uuid.parse(id),{assistantPostId:postId});
+    const attachment = {type:'attachment',attrs:{id:result.id,scope:postId,fileId:result.fileId,kind:'image',name:result.name,size:result.size}};
+    return {...result,block:{type:'mediaRow',attrs:{id:randomUUID()},content:[attachment]}};
   }
 
   @Delete('posts/:id') @AssistantPermission('delete')

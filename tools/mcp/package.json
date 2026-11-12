@@ -1,8 +1,9 @@
 {
-  "name": "ggeujeok-mcp",
+  "name": "@ggeujeok/mcp",
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "exports": { "types": "./tools.d.mts", "default": "./tools.mjs" },
   "engines": { "node": ">=24" },
   "scripts": { "start": "node server.mjs", "test": "node --test test/*.test.mjs" },
   "dependencies": { "@modelcontextprotocol/server": "2.4.0", "zod": "4.6.5" },

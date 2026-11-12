@@ -48,7 +48,7 @@ export function AssistantKeys({csrf}:{csrf:string}) {
         <label htmlFor="assistant-key-name">연결 이름</label>
         <input id="assistant-key-name" value={name} onChange={event=>setName(event.target.value)} maxLength={60} required placeholder="예: 블로그 정기 점검" />
         <label className="setting-toggle"><span>글·댓글·카테고리 작성 및 글·카테고리 수정 허용</span><input type="checkbox" checked={canWrite} onChange={event=>setWrite(event.target.checked)} /></label>
-        <label className="setting-toggle"><span>글 공개 허용</span><input type="checkbox" checked={canPublish} onChange={event=>setPublish(event.target.checked)} /></label>
+        <label className="setting-toggle"><span>글 공개·비공개 전환 허용</span><input type="checkbox" checked={canPublish} onChange={event=>setPublish(event.target.checked)} /></label>
         <label className="setting-toggle"><span>글·댓글·카테고리 삭제 허용</span><input type="checkbox" checked={canDelete} onChange={event=>setDelete(event.target.checked)} /></label>
         <button type="submit" disabled={!name.trim()}>키 발급</button>
       </fieldset>

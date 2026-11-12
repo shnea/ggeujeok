@@ -11,8 +11,10 @@ test('real stdio tools list posts, preserve patch fields, and report API rejecti
   const api = createServer(async (req,res)=>{
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
+    const buffer = Buffer.concat(chunks);
     calls.push({method:req.method,url:req.url,authorized:req.headers.authorization===`Bearer ${token}`,
-      body:chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined});
+      body:!buffer.length ? undefined : req.headers['content-type']==='application/octet-stream' ?
+        {offset:req.headers['upload-offset'],bytes:[...buffer]} : JSON.parse(buffer.toString())});
     res.setHeader('Content-Type','application/json');
     if (req.method==='DELETE') {res.statusCode=403; res.end(JSON.stringify({detail:'보호 카테고리의 글은 삭제할 수 없습니다.'}));return;}
     res.end(JSON.stringify(req.method==='GET' ? {items:[{id:postId,title:'루미의 글',summary:'요약'}]} : {version:3}));
@@ -37,10 +39,13 @@ test('real stdio tools list posts, preserve patch fields, and report API rejecti
     const refused = await client.callTool({name:'delete_post',arguments:{postId}});
     assert.equal(refused.isError,true);
     assert.match(refused.content[0].text,/HTTP 403.*보호 카테고리/);
+    const chunk = await client.callTool({name:'upload_image_chunk',arguments:{postId,uploadId:postId,offset:2,data:'AQID'}});
+    assert.ok(!chunk.isError);
     assert.deepEqual(calls,[
       {method:'GET',url:'/api/automation/assistant/posts',authorized:true,body:undefined},
       {method:'PATCH',url:`/api/automation/assistant/posts/${postId}`,authorized:true,body:{version:2,changes:{title:'새 제목'}}},
       {method:'DELETE',url:`/api/automation/assistant/posts/${postId}`,authorized:true,body:undefined},
+      {method:'PATCH',url:`/api/automation/assistant/posts/${postId}/uploads/${postId}`,authorized:true,body:{offset:'2',bytes:[1,2,3]}},
     ]);
   } finally {
     await client.close();

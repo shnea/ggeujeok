@@ -127,13 +127,15 @@ export class Posts {
 
   async listForAssistant(raw: unknown) {
     const {page,q,category,status} = assistantPostListInput.parse(raw);
-    const {rows} = await this.db.query(`SELECT p.id,p.slug,CASE WHEN p.status='PUBLIC' THEN p.title ELSE d.data->>'title' END AS title,
+    const {rows} = await this.db.query(`SELECT p.id,CASE WHEN p.status='PUBLIC' THEN p.slug ELSE COALESCE(d.data->>'slug',p.slug) END AS slug,
+      CASE WHEN p.status='PUBLIC' THEN p.title ELSE d.data->>'title' END AS title,
       COALESCE(NULLIF(CASE WHEN p.status='PUBLIC' THEN p.summary ELSE d.data->>'summary' END,''),
         CASE WHEN p.status='PUBLIC' THEN CASE WHEN p.ai_summary_version=p.version THEN p.ai_summary END ELSE d.ai_summary END,
         left(p.content_text,160)) AS summary,p.status,
       p.ai_generated AS "aiGenerated",c.slug AS category,d.version,p.published_at AS "publishedAt",p.updated_at AS "updatedAt"
       FROM posts p JOIN post_drafts d ON d.post_id=p.id LEFT JOIN categories c ON c.id=CASE WHEN p.status='PUBLIC' THEN p.category_id ELSE d.category_id END
-      WHERE ($1='' OR strpos(lower(concat_ws(' ',p.slug,CASE WHEN p.status='PUBLIC' THEN p.title ELSE d.data->>'title' END)),lower($1))>0)
+      WHERE ($1='' OR strpos(lower(CASE WHEN p.status='PUBLIC' THEN concat_ws(' ',p.slug,p.title,p.summary,p.content_text)
+        ELSE concat_ws(' ',p.slug,d.data->>'slug',d.data->>'title',d.data->>'summary') END),lower($1))>0)
       AND ($2::text IS NULL OR c.slug=$2) AND ($3='ALL' OR p.status=$3)
       ORDER BY COALESCE(p.published_at,p.created_at) DESC,p.id DESC LIMIT 26 OFFSET $4`,[q,category??null,status,(page-1)*25]);
     return {items:rows.slice(0,25),nextPage:rows.length>25 ? page+1 : null};
@@ -285,6 +287,27 @@ export class Posts {
       if (!result.rowCount) throw new NotFoundException();
       await audit(tx, actor, 'post.delete', id);
       return { deleted: true };
+    });
+  }
+
+  async unpublishForAssistant(id:string,raw:unknown,actor:AssistantActor) {
+    const {draftVersion,baseVersion} = publishInput.omit({status:true}).parse(raw);
+    return this.db.transaction(async tx=>{
+      const {rows:[post]} = await tx.query(`SELECT p.status,p.version,p.category_id,d.category_id AS draft_category_id,
+        d.version AS draft_version,d.base_version FROM posts p JOIN post_drafts d ON d.post_id=p.id WHERE p.id=$1 FOR UPDATE OF p,d`,[id]);
+      if (!post) throw new NotFoundException('글을 찾을 수 없습니다.');
+      if (post.version!==baseVersion || post.base_version!==baseVersion || post.draft_version!==draftVersion) {
+        throw new ConflictException('글 또는 편집본이 변경됐습니다. 새로 확인한 뒤 반영해 주세요.');
+      }
+      if (post.status==='PRIVATE') return {status:'PRIVATE',version:draftVersion,baseVersion};
+      if (post.status!=='PUBLIC') throw new ConflictException('현재 공개된 글만 비공개로 전환할 수 있습니다.');
+      if (await hasProtectedCategory(tx,post.category_id,post.draft_category_id)) throw new ForbiddenException('공개 중인 보호 글은 비공개로 전환할 수 없습니다.');
+      await tx.query(`UPDATE posts SET status='PRIVATE',version=version+1,updated_at=now(),
+        ai_summary_version=CASE WHEN ai_summary_version=version THEN version+1 ELSE ai_summary_version END WHERE id=$1`,[id]);
+      await tx.query(`UPDATE post_drafts SET base_version=$2,version=version+1,updated_at=now(),
+        ai_summary_version=CASE WHEN ai_summary_version=version THEN version+1 ELSE ai_summary_version END WHERE post_id=$1`,[id,baseVersion+1]);
+      await audit(tx,actor,'post.private',id);
+      return {status:'PRIVATE',version:draftVersion+1,baseVersion:baseVersion+1};
     });
   }
 

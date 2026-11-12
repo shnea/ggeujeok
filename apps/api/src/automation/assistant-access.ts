@@ -11,7 +11,7 @@ import { audit, type AssistantActor } from '../operations/audit.js';
 
 const permissionKey = Symbol('assistantPermission');
 type Permission = 'write' | 'publish' | 'delete';
-export const AssistantPermission = (permission: Permission) => SetMetadata(permissionKey, permission);
+export const AssistantPermission = (permission: Permission | 'connect') => SetMetadata(permissionKey, permission);
 export type AssistantRequest = AuthRequest & { assistant: AssistantActor; assistantPermissions: Record<Permission,boolean> };
 const hash = (token: string) => createHash('sha256').update(token).digest('hex');
 
@@ -21,17 +21,21 @@ export class AssistantGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<AssistantRequest>();
+    const configured = this.reflector.get<Permission | 'connect' | undefined>(permissionKey,context.getHandler());
+    const unauthorized = (message:string) => {
+      if (configured==='connect') context.switchToHttp().getResponse().setHeader('WWW-Authenticate','Bearer realm="ggeujeok-mcp"');
+      return new UnauthorizedException(message);
+    };
     const token = /^Bearer (ggm_[A-Za-z0-9_-]{43})$/i.exec(request.header('authorization') ?? '')?.[1];
-    if (!token || !config.ADMIN_OIDC_ISSUER || !config.ADMIN_OIDC_SUBJECT) throw new UnauthorizedException('AI 도우미 전용 키가 필요합니다.');
+    if (!token || !config.ADMIN_OIDC_ISSUER || !config.ADMIN_OIDC_SUBJECT) throw unauthorized('AI 도우미 전용 키가 필요합니다.');
     const { rows: [key] } = await this.db.query(`SELECT k.id,k.issuer_id,k.can_write,k.can_publish,k.can_delete,s.data FROM assistant_keys k
       JOIN users u ON u.id=k.issuer_id LEFT JOIN ai_settings s ON s.singleton
       WHERE k.token_hash=$1 AND k.expires_at>now() AND u.issuer=$2 AND u.subject=$3`,
     [hash(token),config.ADMIN_OIDC_ISSUER,config.ADMIN_OIDC_SUBJECT]);
-    if (!key) throw new UnauthorizedException('AI 도우미 키가 만료되었거나 유효하지 않습니다.');
+    if (!key) throw unauthorized('AI 도우미 키가 만료되었거나 유효하지 않습니다.');
     const permissions = { write:Boolean(key.can_write),publish:Boolean(key.can_publish),delete:Boolean(key.can_delete) };
-    const permission = this.reflector.get<Permission | undefined>(permissionKey,context.getHandler()) ??
-      (['GET','HEAD'].includes(request.method) ? undefined : 'write');
-    if (permission && !permissions[permission]) throw new ForbiddenException('이 AI 도우미 키에는 해당 작업 권한이 없습니다.');
+    const permission = configured ?? (['GET','HEAD'].includes(request.method) ? undefined : 'write');
+    if (permission && permission!=='connect' && !permissions[permission]) throw new ForbiddenException('이 AI 도우미 키에는 해당 작업 권한이 없습니다.');
     const profile = key.data as Assistant | null;
     request.assistant = { issuerId:key.issuer_id,keyId:key.id,
       identity:{ ...(profile?.name ? identity(profile) : {name:'루미',imageUrl:null}),source:'mcp' } };

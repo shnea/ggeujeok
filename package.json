@@ -3,14 +3,15 @@
   "private": true,
   "workspaces": [
     "apps/api",
-    "apps/web"
+    "apps/web",
+    "tools/mcp"
   ],
   "engines": {
     "node": ">=24 <25"
   },
   "scripts": {
-    "build": "npm run build --workspaces",
-    "typecheck": "npm run typecheck --workspaces",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspace @ggeujeok/api",
     "dev:api": "npm run dev --workspace @ggeujeok/api",
     "dev:web": "npm run dev --workspace @ggeujeok/web",

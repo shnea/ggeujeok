@@ -12,6 +12,9 @@
     "test:integration": "tsx --test --test-concurrency=1 test/*.integration.ts"
   },
   "dependencies": {
+    "@ggeujeok/mcp": "1.0.0",
+    "@modelcontextprotocol/node": "2.1.2",
+    "@modelcontextprotocol/server": "2.4.0",
     "@nestjs/common": "12.1.0",
     "@nestjs/core": "12.1.0",
     "@nestjs/platform-express": "12.1.0",
@@ -22,5 +25,6 @@
     "rxjs": "7.8.2",
     "sharp": "0.35.4",
     "zod": "4.6.5"
-  }
+  },
+  "devDependencies": { "@modelcontextprotocol/client": "2.4.0" }
 }
