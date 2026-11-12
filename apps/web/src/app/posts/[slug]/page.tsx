@@ -29,6 +29,9 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 export default async function PostPage({ params }: { params: Promise<{ slug: string }> }) {
   const siteInfo = await getSiteInfo();
   const post = await getPost((await params).slug);
+  const assistantName = post.aiIdentity?.name || '도우미';
+  const lastSyllable = assistantName.charCodeAt(assistantName.length - 1);
+  const subjectParticle = lastSyllable >= 0xac00 && lastSyllable <= 0xd7a3 && (lastSyllable - 0xac00) % 28 !== 0 ? '이' : '가';
   const [related, neighbors, ads] = await Promise.all([
     serverApi<PublicPost[]>(`/api/public/posts/${post.slug}/related`),
     serverApi<{ previous: { slug: string; title: string } | null; next: { slug: string; title: string } | null }>(`/api/public/posts/${post.slug}/neighbors`),
@@ -39,7 +42,7 @@ export default async function PostPage({ params }: { params: Promise<{ slug: str
     author: { '@type': 'Person', name: post.aiGenerated ? `${post.aiIdentity?.name || '도우미'} (AI)` : siteInfo.operator, url: `${siteUrl()}/about` }, mainEntityOfPage: `${siteUrl()}/posts/${post.slug}`,
     ...(post.thumbnailId ? { image: `${siteUrl()}/api/public/posts/${post.slug}/image` } : {}) };
   return <div className={`post-layout${ads.sidebar ? ' has-sidebar' : ''}`}><article className="article-page"><a className="back-link" href="/">모든 기록으로</a>
-    <header className="article-header"><h1>{post.title}</h1>{post.aiGenerated&&<div className="ai-author">{post.aiIdentity?.imageUrl&&<img className="ai-avatar" src={post.aiIdentity.imageUrl} alt="" referrerPolicy="no-referrer" />}<span>{post.aiIdentity?.name||'도우미'} · AI가 작성한 글입니다.</span></div>}
+    <header className="article-header"><h1>{post.title}</h1>{post.aiGenerated&&<div className="ai-author">{post.aiIdentity?.imageUrl&&<img className="ai-avatar" src={post.aiIdentity.imageUrl} alt="" referrerPolicy="no-referrer" />}<span>{`${assistantName}${subjectParticle} 작성한 글입니다.`}</span></div>}
       <details className="article-summary"><summary>요약 보기</summary>
         <p>{post.aiSummary&&<span className="ai-badge">{post.aiSummaryIdentity?.name?`${post.aiSummaryIdentity.name} · `:''}AI 요약</span>} {post.summary}</p>
       </details>
