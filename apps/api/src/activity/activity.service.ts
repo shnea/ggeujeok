@@ -4,13 +4,23 @@ import { promisify } from 'node:util';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { Database } from '../database/database.js';
+import { config } from '../config.js';
 import { enqueueAssistantReply } from '../ai/ai.service.js';
 import type { Session } from '../auth/sessions.js';
 import { Captchas } from './captcha.service.js';
 import { Notifications } from '../notifications/notifications.service.js';
+import { audit, type AssistantActor } from '../operations/audit.js';
 
 const contentInput = z.object({ content: z.string().trim().min(1).max(2000) }).strict();
 const createInput = contentInput.extend({ requestId: z.uuid(), parentId: z.uuid().nullable().optional(), replyToId: z.uuid().nullable().optional() });
+const commentVersion = z.iso.datetime({offset:true});
+const assistantCommentInput = contentInput.extend({requestId:z.uuid(),replyToId:z.uuid().optional(),expectedUpdatedAt:commentVersion.optional()});
+const assistantCommentFields = `c.id,c.post_id AS "postId",c.parent_id AS "parentId",c.reply_to_id AS "replyToId",c.content,
+  c.created_at AS "createdAt",c.updated_at AS "updatedAt",c.ai_identity AS "aiIdentity",c.status='DELETED' AS "isDeleted",
+  CASE WHEN c.status='DELETED' THEN '삭제된 댓글' ELSE COALESCE(c.ai_identity->>'name',c.guest_name,u.custom_nickname,u.nickname,'회원') END AS "authorName"`;
+const answered = `EXISTS(SELECT 1 FROM comments reply LEFT JOIN users responder ON responder.id=reply.user_id
+  WHERE reply.post_id=c.post_id AND reply.status='VISIBLE' AND COALESCE(reply.reply_to_id,reply.parent_id)=c.id
+  AND (reply.ai_identity IS NOT NULL OR reply.user_id=p.author_id OR (responder.issuer=$1 AND responder.subject=$2)))`;
 const pageInput = z.coerce.number().int().min(1).max(10000).default(1);
 const guestNicknameInput = z.string().trim().normalize('NFC').min(2).max(30).regex(/^[\p{L}\p{N} _.-]+$/u);
 const passwordInput = z.string().min(8).max(128);
@@ -49,6 +59,87 @@ export class Activity {
       FROM comments c JOIN posts p ON p.id=c.post_id LEFT JOIN users u ON u.id=c.user_id WHERE c.status='VISIBLE' AND ($2::uuid IS NULL OR c.id=$2)
       ORDER BY c.created_at DESC,c.id DESC LIMIT 20 OFFSET $1`, [(page-1)*20,target ?? null]);
     return {items:items.rows,page,total:(await this.db.query("SELECT count(*)::int AS total FROM comments WHERE status='VISIBLE' AND ($1::uuid IS NULL OR id=$1)",[target ?? null])).rows[0].total};
+  }
+
+  async commentsForAssistant(postId:string,raw:unknown) {
+    const {page,thread} = z.object({page:pageInput,thread:z.uuid().optional()}).parse(raw);
+    const {rows} = await this.db.query(`SELECT ${assistantCommentFields} FROM comments c LEFT JOIN users u ON u.id=c.user_id
+      WHERE c.post_id=$1 AND ($2::uuid IS NULL OR c.id=$2 OR c.parent_id=$2)
+      AND (c.status='VISIBLE' OR ($2::uuid IS NOT NULL AND c.id=$2))
+      ORDER BY c.created_at,c.id LIMIT 31 OFFSET $3`,[postId,thread??null,(page-1)*30]);
+    return {items:rows.slice(0,30),nextPage:rows.length>30 ? page+1 : null};
+  }
+
+  async unansweredForAssistant(raw:unknown) {
+    const {after} = z.object({after:z.uuid().optional()}).parse(raw);
+    const {rows} = await this.db.query(`SELECT ${assistantCommentFields},p.title,p.slug,
+      COALESCE(c.parent_id,c.id) AS "threadId" FROM comments c JOIN posts p ON p.id=c.post_id LEFT JOIN users u ON u.id=c.user_id
+      WHERE p.status='PUBLIC' AND p.comments_enabled AND c.status='VISIBLE' AND c.ai_identity IS NULL
+      AND c.user_id IS DISTINCT FROM p.author_id AND NOT COALESCE(u.issuer=$1 AND u.subject=$2,false)
+      AND (c.assistant_reviewed_at IS NULL OR c.assistant_reviewed_at<c.updated_at) AND NOT ${answered}
+      AND NOT EXISTS(SELECT 1 FROM ai_tasks a WHERE a.comment_id=c.id AND a.state IN ('PENDING','QUEUED','RUNNING')
+        AND a.created_at>now()-interval '10 minutes') AND ($3::uuid IS NULL OR c.id>$3)
+      ORDER BY c.id LIMIT 21`,[config.ADMIN_OIDC_ISSUER,config.ADMIN_OIDC_SUBJECT,after??null]);
+    return {items:rows.slice(0,20),nextCursor:rows.length>20 ? rows[19].id : null};
+  }
+
+  async createForAssistant(postId:string,raw:unknown,actor:AssistantActor) {
+    const {requestId,content,replyToId,expectedUpdatedAt} = assistantCommentInput.parse(raw);
+    const digest = createHash('sha256').update(JSON.stringify(['mcp',postId,content,replyToId??null])).digest('hex');
+    return this.db.transaction(async tx => {
+      await this.serialize(tx,`assistant:${actor.issuerId}`);
+      const {rows:[existing]} = await tx.query('SELECT request_hash FROM comments WHERE id=$1',[requestId]);
+      if (existing) {
+        if (existing.request_hash!==digest) throw new ConflictException('이미 사용한 댓글 등록 요청 ID입니다.');
+        return {id:requestId,reused:true};
+      }
+      await this.publicPost(tx,postId,false,true);
+      let parentId: string | null = null;
+      if (replyToId) {
+        const {rows:[ref]} = await tx.query('SELECT parent_id FROM comments WHERE id=$1 AND post_id=$2',[replyToId,postId]);
+        if (!ref) throw new NotFoundException('답글 대상을 찾을 수 없습니다.');
+        parentId = ref.parent_id ?? replyToId;
+        // Use the same parent-before-target lock order as normal replies.
+        if (parentId!==replyToId) await this.checkParent(tx,postId,parentId,replyToId);
+        const {rows:[target]} = await tx.query(`SELECT updated_at FROM comments WHERE id=$1 AND post_id=$2 AND status='VISIBLE' FOR NO KEY UPDATE`,[replyToId,postId]);
+        if (!target) throw new NotFoundException('답글 대상을 찾을 수 없습니다.');
+        if (expectedUpdatedAt && target.updated_at.getTime()!==Date.parse(expectedUpdatedAt)) throw new ConflictException('댓글 내용이 바뀌었습니다. 다시 확인해 주세요.');
+        const {rows:[state]} = await tx.query(`SELECT ${answered} AS answered FROM comments c JOIN posts p ON p.id=c.post_id WHERE c.id=$3`,
+          [config.ADMIN_OIDC_ISSUER,config.ADMIN_OIDC_SUBJECT,replyToId]);
+        if (state.answered) throw new ConflictException('운영자 또는 AI 도우미가 이미 답변했습니다.');
+      }
+      await this.limit(tx,actor.issuerId,'assistant_comment');
+      await tx.query(`INSERT INTO comments(id,post_id,parent_id,reply_to_id,content,request_hash,ai_identity)
+        VALUES($1,$2,$3,$4,$5,$6,$7)`,[requestId,postId,parentId,replyToId??null,content,digest,actor.identity]);
+      await this.notifications.enqueue(tx,requestId);
+      await audit(tx,actor,'comment.create',requestId);
+      return {id:requestId,reused:false};
+    });
+  }
+
+  async skipForAssistant(postId:string,id:string,raw:unknown,actor:AssistantActor) {
+    const {expectedUpdatedAt} = z.strictObject({expectedUpdatedAt:commentVersion}).parse(raw);
+    return this.db.transaction(async tx => {
+      await this.publicPost(tx,postId,false,true);
+      const result = await tx.query(`UPDATE comments SET assistant_reviewed_at=now() WHERE id=$1 AND post_id=$2 AND status='VISIBLE'
+        AND ai_identity IS NULL AND date_trunc('milliseconds',updated_at)=$3::timestamptz`,[id,postId,expectedUpdatedAt]);
+      if (!result.rowCount) throw new ConflictException('댓글이 변경되었거나 더 이상 확인할 수 없습니다.');
+      await audit(tx,actor,'comment.review.skip',id);
+      return {reviewed:true};
+    });
+  }
+
+  async removeForAssistant(postId:string,id:string,actor:AssistantActor) {
+    return this.db.transaction(async tx => {
+      await this.publicPost(tx,postId,true);
+      const {rows:[comment]} = await tx.query('SELECT status FROM comments WHERE id=$1 AND post_id=$2 FOR UPDATE',[id,postId]);
+      if (!comment) throw new NotFoundException('댓글을 찾을 수 없습니다.');
+      if (comment.status==='VISIBLE') {
+        await this.eraseComment(tx,id);
+        await audit(tx,actor,'comment.delete',id);
+      }
+      return {deleted:true};
+    });
   }
 
   async location(slug: string, commentId: string) {
@@ -121,7 +212,7 @@ export class Activity {
   private async eraseComment(tx: PoolClient, id: string) {
     // Keep the thread anchor while removing the author's content and credentials.
     await tx.query(`UPDATE comments SET status='DELETED',content='삭제된 댓글입니다.',user_id=NULL,
-      guest_name=NULL,guest_password=NULL,request_hash='',updated_at=now() WHERE id=$1`, [id]);
+      guest_name=NULL,guest_password=NULL,request_hash='',ai_identity=NULL,updated_at=now() WHERE id=$1`, [id]);
     await this.notifications.removeForComment(tx,id);
   }
 
@@ -131,15 +222,16 @@ export class Activity {
     if (creatingComment && !post.rows[0].comments_enabled) throw new ForbiddenException('이 글은 새 댓글과 답글을 받지 않습니다.');
   }
 
-  private async limit(tx: PoolClient, user: string, action: 'comment' | 'like') {
+  private async limit(tx: PoolClient, user: string, action: 'comment' | 'assistant_comment' | 'like') {
     await tx.query('INSERT INTO activity_limits(user_id,action) VALUES($1,$2) ON CONFLICT DO NOTHING', [user, action]);
     const result = await tx.query('SELECT events,clock_timestamp() AS now FROM activity_limits WHERE user_id=$1 AND action=$2 FOR UPDATE', [user, action]);
-    const now = result.rows[0].now.getTime(), window = action === 'comment' ? 3600000 : 60000;
+    const isComment = action!=='like';
+    const now = result.rows[0].now.getTime(), window = isComment ? 3600000 : 60000;
     const events = (result.rows[0].events as Date[]).map(value => value.getTime()).filter(value => value > now - window).sort((a,b) => a-b);
     const minute = events.filter(value => value > now - 60000);
     const waits: number[] = [];
-    if (minute.length >= (action === 'comment' ? 5 : 60)) waits.push(minute[0] + 60000 - now);
-    if (action === 'comment' && events.length >= 60) waits.push(events[0] + 3600000 - now);
+    if (minute.length >= (isComment ? 5 : 60)) waits.push(minute[0] + 60000 - now);
+    if (isComment && events.length >= 60) waits.push(events[0] + 3600000 - now);
     if (waits.length) {
       const retryAfterSeconds = Math.max(1, Math.ceil(Math.max(...waits) / 1000));
       throw new HttpException({ message: `${retryAfterSeconds}초 뒤 다시 시도해 주세요.`, retryAfterSeconds }, 429);

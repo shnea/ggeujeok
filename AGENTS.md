@@ -57,6 +57,7 @@
 | 대표 이미지·공유 이미지 | [참조 검증](apps/api/src/files/references.ts), [대표 이미지 선택](apps/web/src/app/admin/posts/[id]/cover-picker.tsx), [공개 상세](apps/web/src/app/posts/[slug]/page.tsx) | 아래 통합 테스트, `npm run test --workspace @ggeujeok/web` |
 | DB·마이그레이션 | [DB 연결](apps/api/src/database/), [마이그레이션](apps/api/migrations/) | 아래 통합 테스트 |
 | AI 도우미·호출·기억·수동 요약/태그 | [AI 처리](apps/api/src/ai/), [플랫폼 AI](apps/api/src/ai/platform-ai.ts), [편집 화면](apps/web/src/app/admin/posts/[id]/page.tsx), [설정 화면](apps/web/src/app/admin/settings/ai-settings-form.tsx) | `npm test`, 아래 통합 테스트, [연결 관리](docs/operations.md#deployment) |
+| AI 도우미 콘텐츠 관리 MCP | [MCP](tools/mcp/server.mjs), [자동화 API](apps/api/src/automation/), [연결 안내](docs/assistant-mcp.md) | `npm test --prefix tools/mcp`, 아래 통합 테스트 |
 | 환경·Docker | [실행](compose.yaml), [개발](compose.dev.yaml), [이미지](docker/) | [실행 절차](docs/operations.md#deployment) |
 | 방문 통계·운영 로그·파일 정리 | [통계](apps/api/src/statistics/), [로그](apps/api/src/operations/), [정리](apps/api/src/files/cleanup.ts), [워커](apps/api/src/worker.ts) | `npm test`, 아래 통합 테스트 |
 | DB 백업·격리 복원 | [백업](scripts/backup-db.sh), [복원 점검](scripts/check-db-restore.sh) | [백업 절차](docs/operations.md#deployment) |

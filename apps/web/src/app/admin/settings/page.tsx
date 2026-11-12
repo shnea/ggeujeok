@@ -6,6 +6,7 @@ import { adfitSizes, emptyAdfit, emptyFeed, type AdFitSettings, type AdSettingsI
 import { api, ApiError, mutation, type Session } from '@/lib/api';
 import { AiSettingsForm } from './ai-settings-form';
 import { SiteSettingsForm } from './site-settings-form';
+import { AssistantKeys } from './assistant-keys';
 
 type Settings = AdSettingsInput & { source: 'admin' | 'environment' };
 export default function AdSettingsPage() {
@@ -43,7 +44,7 @@ export default function AdSettingsPage() {
   return <section className="admin-page">
     <nav className="admin-nav" aria-label="관리 메뉴"><a href="/admin">글 관리</a><a href="/admin/categories">카테고리</a><a href="/admin/comments">댓글 관리</a><a href="/admin/statistics">방문 통계</a><a href="/admin/settings" aria-current="page">설정</a></nav>
     <div className="page-heading"><div><h1>사이트 설정</h1><p>블로그 정보, 검색 등록, 방문 분석과 광고를 관리합니다.</p></div></div>
-    {session?.user?.isAdmin && !denied && <><nav className="settings-sections" aria-label="설정 항목"><a href="#site-settings">기본 정보·검색·분석</a><a href="#ad-settings">광고</a><a href="#ai-settings">AI 도우미</a></nav><SiteSettingsForm session={session} /></>}
+    {session?.user?.isAdmin && !denied && <><nav className="settings-sections" aria-label="설정 항목"><a href="#site-settings">기본 정보·검색·분석</a><a href="#ad-settings">광고</a><a href="#ai-settings">AI 도우미</a><a href="#assistant-keys">MCP 연결</a></nav><SiteSettingsForm session={session} /></>}
     {loading ? <p role="status">설정을 불러오는 중…</p> : denied ? <div className="empty-state"><p>관리자 계정으로 로그인해 주세요.</p>
       <a className="button" href="/login?returnTo=%2Fadmin%2Fsettings"><LogIn aria-hidden="true" />로그인</a></div>
       : saved && <form id="ad-settings" className="ad-settings" onSubmit={event => { event.preventDefault(); void save(); }}>
@@ -99,6 +100,7 @@ export default function AdSettingsPage() {
         <p className="field-help">글 하단에 표시하며, 넓은 PC 화면에서는 오른쪽과 긴 글 중간에도 표시합니다.</p>
       </form>}
     {session?.user?.isAdmin && !denied && <AiSettingsForm session={session} />}
+    {session?.user?.isAdmin && session.csrfToken && !denied && <AssistantKeys csrf={session.csrfToken} />}
     {error && !denied && <div className="notice error" role="alert"><p>{error}</p>{!saved && <button className="text-button" disabled={loading} onClick={() => setRevision(value => value + 1)}><RefreshCw aria-hidden="true" />다시 불러오기</button>}</div>}
     {message && <p role="status" className="profile-feedback">{message}</p>}
   </section>;

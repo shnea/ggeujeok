@@ -12,6 +12,8 @@ import { AuthController } from './auth/auth.controller.js';
 import { AdminGuard, UserGuard, Errors, type AuthRequest } from './http.js';
 import { PostsController, AdminPostsController, AdminTagsController } from './posts/posts.controller.js';
 import { Posts } from './posts/posts.service.js';
+import { AssistantGuard, AssistantKeysController } from './automation/assistant-access.js';
+import { AssistantController } from './automation/assistant.controller.js';
 import { AdminImagesController, ImagesController } from './files/images.controller.js';
 import { Images } from './files/images.service.js';
 import { PlatformFiles } from './files/platform-files.js';
@@ -37,8 +39,8 @@ class HealthController {
   @Get('health') async health() { await this.db.query('SELECT 1'); return { status: 'ok' }; }
 }
 
-@Module({ imports: [DatabaseModule], controllers: [AdminAiController, AiCacheController, HealthController, AuthController, PostsController, AdminPostsController, AdminTagsController, AdminImagesController, ImagesController, CategoriesController, ActivityController, PublicActivityController, GuestActivityController, AdminCommentsController, MeController, AdminAdSettingsController, PublicAdSettingsController, AdminSiteSettingsController, PublicSiteSettingsController, AdminVisitsController, PublicVisitsController],
-  providers: [Ai, Sessions, AdminGuard, UserGuard, Posts, Images, PlatformFiles, Categories, Activity, Captchas, Notifications, MyActivity, AdSettings, SiteSettings, Visits, { provide: OperationalLogs, useValue: logs }] })
+@Module({ imports: [DatabaseModule], controllers: [AdminAiController, AiCacheController, HealthController, AuthController, PostsController, AdminPostsController, AdminTagsController, AssistantKeysController, AssistantController, AdminImagesController, ImagesController, CategoriesController, ActivityController, PublicActivityController, GuestActivityController, AdminCommentsController, MeController, AdminAdSettingsController, PublicAdSettingsController, AdminSiteSettingsController, PublicSiteSettingsController, AdminVisitsController, PublicVisitsController],
+  providers: [Ai, Sessions, AdminGuard, UserGuard, AssistantGuard, Posts, Images, PlatformFiles, Categories, Activity, Captchas, Notifications, MyActivity, AdSettings, SiteSettings, Visits, { provide: OperationalLogs, useValue: logs }] })
 class AppModule {}
 
 validateAuthConfig();

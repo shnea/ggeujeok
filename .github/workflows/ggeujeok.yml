@@ -39,6 +39,12 @@ jobs:
         run: |
           docker build --target development -t ggeujeok-api:dev -f docker/api.Dockerfile .
           docker compose -f compose.test.yaml up --abort-on-container-exit --exit-code-from test
+      - name: Test MCP stdio
+        run: |
+          docker run --rm -v "$PWD:/workspace" -w /workspace/tools/mcp node:24-bookworm-slim sh -ec '
+            npm ci --ignore-scripts
+            npm test
+          '
       - name: Stop isolated tests
         if: always()
         run: docker compose -f compose.test.yaml down

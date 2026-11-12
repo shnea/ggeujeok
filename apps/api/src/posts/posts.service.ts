@@ -1,12 +1,15 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { PoolClient } from 'pg';
 import { createDraft } from './create-draft.js';
 import { Database } from '../database/database.js';
 import { syncImageReferences } from '../files/references.js';
-import { initialPost, listInput, normalizeTag, plainText, publishInput, saveInput, tagSearchInput, validatePost } from './post-input.js';
+import { initialPost, listInput, normalizeTag, plainText, publishInput, saveInput, tagSearchInput, validatePost, type PostData } from './post-input.js';
 import { syncTags } from './tags.js';
+import { audit, type AssistantActor } from '../operations/audit.js';
+import { hasProtectedCategory, keepProtectedCategory } from './protected-categories.js';
+import { articleDocument, assistantPostListInput, candidateCursor, createAssistantPostInput, reviewInput, updateAssistantPostInput } from './assistant-post-input.js';
 
 // Existing posts also get the first body image without rewriting their content.
 const thumbnailColumn = `COALESCE(p.thumbnail_id::text, NULLIF(jsonb_path_query_first(p.content,
@@ -117,9 +120,88 @@ export class Posts {
     const id = randomUUID(), data = initialPost(`post-${id.slice(0, 8)}`);
     await this.db.transaction(async tx => {
       await createDraft(tx,id,data,actor);
-      await this.audit(tx, actor, 'post.create', id);
+      await audit(tx, actor, 'post.create', id);
     });
     return { id };
+  }
+
+  async listForAssistant(raw: unknown) {
+    const {page,q,category,status} = assistantPostListInput.parse(raw);
+    const {rows} = await this.db.query(`SELECT p.id,p.slug,CASE WHEN p.status='PUBLIC' THEN p.title ELSE d.data->>'title' END AS title,
+      COALESCE(NULLIF(CASE WHEN p.status='PUBLIC' THEN p.summary ELSE d.data->>'summary' END,''),
+        CASE WHEN p.status='PUBLIC' THEN CASE WHEN p.ai_summary_version=p.version THEN p.ai_summary END ELSE d.ai_summary END,
+        left(p.content_text,160)) AS summary,p.status,
+      p.ai_generated AS "aiGenerated",c.slug AS category,d.version,p.published_at AS "publishedAt",p.updated_at AS "updatedAt"
+      FROM posts p JOIN post_drafts d ON d.post_id=p.id LEFT JOIN categories c ON c.id=CASE WHEN p.status='PUBLIC' THEN p.category_id ELSE d.category_id END
+      WHERE ($1='' OR strpos(lower(concat_ws(' ',p.slug,CASE WHEN p.status='PUBLIC' THEN p.title ELSE d.data->>'title' END)),lower($1))>0)
+      AND ($2::text IS NULL OR c.slug=$2) AND ($3='ALL' OR p.status=$3)
+      ORDER BY COALESCE(p.published_at,p.created_at) DESC,p.id DESC LIMIT 26 OFFSET $4`,[q,category??null,status,(page-1)*25]);
+    return {items:rows.slice(0,25),nextPage:rows.length>25 ? page+1 : null};
+  }
+
+  async createForAssistant(raw: unknown, actor: AssistantActor) {
+    const input = createAssistantPostInput.parse(raw);
+    const {requestId,markdown,category,...fields} = input;
+    const digest = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    return this.db.transaction(async tx => {
+      const inserted = await tx.query(`INSERT INTO assistant_post_requests(id,input_hash) VALUES($1,$2)
+        ON CONFLICT DO NOTHING RETURNING id`,[requestId,digest]);
+      if (!inserted.rowCount) {
+        const {rows:[existing]} = await tx.query('SELECT input_hash,post_id FROM assistant_post_requests WHERE id=$1',[requestId]);
+        if (existing.input_hash !== digest || !existing.post_id) throw new ConflictException('이미 사용한 글 등록 요청 ID입니다.');
+        return {id:existing.post_id,reused:true};
+      }
+      const id = randomUUID();
+      const categoryId = await this.categoryId(tx,category);
+      const data = {...initialPost(fields.slug),...fields,categoryId,content:articleDocument(markdown)};
+      await createDraft(tx,id,data,actor.issuerId,actor.identity);
+      await syncImageReferences(tx,id,data.content,'DRAFT',null);
+      await tx.query('UPDATE assistant_post_requests SET post_id=$2 WHERE id=$1',[requestId,id]);
+      await audit(tx,actor,'post.create',id);
+      return {id,reused:false};
+    });
+  }
+
+  async updateForAssistant(id: string, raw: unknown, actor: AssistantActor) {
+    const {version,changes:{markdown,category,document,...fields}} = updateAssistantPostInput.parse(raw);
+    const current = await this.edit(id);
+    const data: PostData = {...current.data,...fields};
+    if (category) data.categoryId = await this.categoryId(this.db,category);
+    if (markdown !== undefined) data.content = articleDocument(markdown);
+    return this.save(id,{version,aiRevision:current.aiRevision,data:{...data,content:document===undefined ? data.content : document}},actor);
+  }
+
+  private async categoryId(query: PoolClient | Database, category: string) {
+    const {rows:[row]} = await query.query('SELECT id FROM categories WHERE slug=$1 FOR SHARE',[category]);
+    if (!row) throw new BadRequestException('지정한 카테고리를 찾을 수 없습니다.');
+    return row.id as string;
+  }
+
+  async reviewCandidates(raw: unknown) {
+    const {after} = candidateCursor.parse(raw);
+    const {rows} = await this.db.query(`SELECT p.id,p.slug,p.title,d.version,p.review_source AS "sourceUrl",
+      COALESCE(p.next_review_at,GREATEST(p.published_at,p.last_reviewed_at)+interval '30 days') AS "dueAt"
+      FROM posts p JOIN post_drafts d ON d.post_id=p.id WHERE p.status='PUBLIC' AND ($1::uuid IS NULL OR p.id>$1)
+      AND COALESCE(p.next_review_at,GREATEST(p.published_at,p.last_reviewed_at)+interval '30 days')<=now()
+      ORDER BY p.id LIMIT 21`,[after??null]);
+    return {items:rows.slice(0,20),nextCursor:rows.length>20 ? rows[19].id : null};
+  }
+
+  async recordReview(id: string, raw: unknown, actor: AssistantActor, complete: boolean) {
+    const {version,nextReviewAt,sourceUrl} = reviewInput.parse(raw);
+    if (complete && nextReviewAt && Date.parse(nextReviewAt)<=Date.now()) throw new BadRequestException('다음 점검일은 미래 시각이어야 합니다.');
+    return this.db.transaction(async tx => {
+      const {rows:[post]} = await tx.query(`SELECT d.version FROM posts p JOIN post_drafts d ON d.post_id=p.id
+        WHERE p.id=$1 FOR UPDATE OF p,d`,[id]);
+      if (!post) throw new NotFoundException('글을 찾을 수 없습니다.');
+      if (post.version !== version) throw new ConflictException('편집본이 변경됐습니다. 다시 확인해 주세요.');
+      const {rows:[review]} = await tx.query(`UPDATE posts SET last_reviewed_at=CASE WHEN $2 THEN now() ELSE last_reviewed_at END,
+        next_review_at=COALESCE($3::timestamptz,CASE WHEN $2 THEN now()+interval '30 days' ELSE now() END),
+        review_source=CASE WHEN $4 THEN $5 ELSE review_source END WHERE id=$1
+        RETURNING next_review_at AS "nextReviewAt",review_source AS "sourceUrl"`,[id,complete,nextReviewAt??null,sourceUrl!==undefined,sourceUrl??null]);
+      await audit(tx,actor,complete?'post.review.complete':'post.review.request',id);
+      return review;
+    });
   }
 
   async edit(id: string) {
@@ -129,14 +211,16 @@ export class Posts {
     return result.rows[0];
   }
 
-  async save(id: string, input: unknown) {
+  async save(id: string, input: unknown, actor?: AssistantActor) {
     const { version, aiRevision, data: raw } = saveInput.parse(input);
     const data = validatePost(raw);
     return this.db.transaction(async tx => {
       const post = await tx.query('SELECT slug,published_at FROM posts WHERE id=$1 FOR UPDATE', [id]);
       if (!post.rows[0]) throw new NotFoundException();
       if (post.rows[0].published_at && post.rows[0].slug !== data.slug) throw new BadRequestException('최초 공개 후에는 주소를 바꿀 수 없습니다.');
-      const draft=(await tx.query('SELECT ai_tags,ai_revision FROM post_drafts WHERE post_id=$1',[id])).rows[0];
+      const draft=(await tx.query('SELECT ai_tags,ai_revision,category_id,version FROM post_drafts WHERE post_id=$1',[id])).rows[0];
+      if (!draft || draft.version!==version) throw new ConflictException('다른 화면에서 편집본이 바뀌었습니다. 내용을 복사한 뒤 다시 열어 주세요.');
+      await keepProtectedCategory(tx,draft.category_id,data.categoryId);
       let aiTags=draft.ai_tags as string[];
       if(aiRevision!==draft.ai_revision){
         data.tags=[...new Map([...data.tags,...aiTags].map(name=>[normalizeTag(name),name])).values()].slice(0,20);
@@ -150,11 +234,12 @@ export class Posts {
           ai_tags AS "aiTags",ai_revision AS "aiRevision",ai_summary AS "aiSummary"`, [id, data, version,JSON.stringify(aiTags)]);
       if (!result.rows[0]) throw new ConflictException('다른 화면에서 편집본이 바뀌었습니다. 내용을 복사한 뒤 다시 열어 주세요.');
       await syncImageReferences(tx, id, data.content, 'DRAFT', data.thumbnailId);
+      if (actor) await audit(tx,actor,'post.update',id);
       return result.rows[0];
     });
   }
 
-  async publish(id: string, input: unknown, actor: string) {
+  async publish(id: string, input: unknown, actor: string | AssistantActor) {
     const expected = publishInput.parse(input);
     return this.db.transaction(async tx => {
       const locked = await tx.query(`SELECT p.*,d.data,d.version AS draft_version,d.base_version,
@@ -166,6 +251,10 @@ export class Posts {
         throw new ConflictException('글 또는 편집본이 변경됐습니다. 새로 확인한 뒤 반영해 주세요.');
       }
       const data = validatePost(post.data), text = plainText(data.content);
+      await keepProtectedCategory(tx,post.category_id,data.categoryId);
+      if (post.status==='PUBLIC' && expected.status==='PRIVATE' && await hasProtectedCategory(tx,post.category_id,data.categoryId)) {
+        throw new ForbiddenException('공개 중인 보호 글은 비공개로 전환할 수 없습니다.');
+      }
       const images = await syncImageReferences(tx, id, data.content, 'PUBLISHED', data.thumbnailId);
       if (expected.status === 'PUBLIC' && ((!text && !images.length) || !data.categoryId)) throw new BadRequestException('공개하려면 본문과 카테고리가 필요합니다.');
       if (post.published_at && post.slug !== data.slug) throw new BadRequestException('최초 공개 후에는 주소를 바꿀 수 없습니다.');
@@ -181,21 +270,22 @@ export class Posts {
       await tx.query('UPDATE posts SET ai_tags=$2 WHERE id=$1',[id,JSON.stringify(post.draft_ai_tags)]);
       await tx.query(`UPDATE post_drafts SET base_version=$2,version=version+1,updated_at=now(),
         ai_summary_version=CASE WHEN ai_summary_version=version THEN version+1 ELSE ai_summary_version END WHERE post_id=$1`, [id, result.rows[0].version]);
-      await this.audit(tx, actor, expected.status === 'PUBLIC' ? 'post.publish' : 'post.private', id);
+      await audit(tx, actor, expected.status === 'PUBLIC' ? 'post.publish' : 'post.private', id);
       return { slug: data.slug, status: expected.status, version: post.draft_version + 1, baseVersion: result.rows[0].version };
     });
   }
 
-  async remove(id: string, actor: string) {
+  async remove(id: string, actor: string | AssistantActor) {
     return this.db.transaction(async tx => {
+      const {rows:[post]} = await tx.query(`SELECT p.category_id,d.category_id AS draft_category_id FROM posts p
+        LEFT JOIN post_drafts d ON d.post_id=p.id WHERE p.id=$1 FOR UPDATE OF p`,[id]);
+      if (!post) throw new NotFoundException();
+      if (await hasProtectedCategory(tx,post.category_id,post.draft_category_id)) throw new ForbiddenException('보호 카테고리의 글은 삭제할 수 없습니다.');
       const result = await tx.query('DELETE FROM posts WHERE id=$1 RETURNING id', [id]);
       if (!result.rowCount) throw new NotFoundException();
-      await this.audit(tx, actor, 'post.delete', id);
+      await audit(tx, actor, 'post.delete', id);
       return { deleted: true };
     });
   }
 
-  private async audit(tx: PoolClient, actor: string, action: string, id: string) {
-    await tx.query('INSERT INTO audit_events(actor_id,action,target_id) VALUES($1,$2,$3)', [actor, action, id]);
-  }
 }

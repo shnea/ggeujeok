@@ -10,7 +10,7 @@ import { CommentForm } from './comment-form';
 
 type Comment = {
   id: string; parentId: string | null; content: string; authorName: string; replyToName: string | null;
-  aiReplyState?: string|null; aiIdentity?: {name:string;imageUrl:string|null}|null; isDeleted: boolean; isGuest: boolean; isAuthor: boolean; createdAt: string; updatedAt: string;
+  aiReplyState?: string|null; aiIdentity?: {name:string;imageUrl:string|null;source?:'mcp'}|null; isDeleted: boolean; isGuest: boolean; isAuthor: boolean; createdAt: string; updatedAt: string;
   canEdit: boolean; canDelete: boolean; replyCount?: number;
 };
 type Activity = { aiAssistant?:{name:string;keyword:string}|null; aiPending?:boolean; comments: Comment[]; commentsEnabled: boolean; commentCount: number; threadCount: number; likeCount: number; liked: boolean; page: number };
@@ -153,7 +153,7 @@ export function PostInteractions({ postId, slug }: { postId: string; slug: strin
     return <article id={`comment-${comment.id}`} className="comment-entry" tabIndex={-1}>
       {comment.isDeleted ? <p className="comment-deleted">삭제된 댓글입니다.</p> : <>
         <div className="comment-meta">{comment.aiIdentity?.imageUrl&&<img className="ai-avatar" src={comment.aiIdentity.imageUrl} alt="" referrerPolicy="no-referrer" />}<strong>{comment.authorName}</strong>
-          <span>{comment.aiIdentity ? 'AI 자동답글' : comment.isGuest ? '비회원' : comment.isAuthor ? '글 작성자' : '회원'}</span><time dateTime={comment.createdAt}>{date(comment.createdAt)}</time>
+          <span>{comment.aiIdentity ? (comment.aiIdentity.source==='mcp' ? 'AI 작성' : 'AI 자동답글') : comment.isGuest ? '비회원' : comment.isAuthor ? '글 작성자' : '회원'}</span><time dateTime={comment.createdAt}>{date(comment.createdAt)}</time>
           {comment.updatedAt !== comment.createdAt && <span>수정됨</span>}</div>
         {!editing && <p className="comment-content">{comment.replyToName && <span className="comment-mention">@{comment.replyToName} </span>}{comment.content}</p>}
         {comment.aiReplyState&&['PENDING','QUEUED','RUNNING'].includes(comment.aiReplyState)&&<p className="field-help" role="status">AI 도우미가 답변을 준비하고 있어요.</p>}
