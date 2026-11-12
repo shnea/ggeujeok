@@ -1,6 +1,6 @@
 # 현재 상태
 
-- 현재 운영 배포: `5a5927939e61`. GitHub 자동 배포 성공·실제 태그·공개 health와 홈 200 확인.
+- 현재 운영 배포: `49b65cd9e3a7`. GitHub 자동 배포 성공·실제 태그·공개 글 상세와 목록 200 확인.
 - 단계: 운영 전환 완료. 공개 주소는 `https://shnea.kr`, 외부 NPM → 운영 NAS의 30145 포트다. 사용자가 접속 정상 확인.
 - 운영 파일: `${NAS_DEPLOY_PATH}`의 Compose·암호화 환경·deploy 스크립트·설명서. 운영 키는 `.env.keys`, 도구는 `.tools`, 자동 기록은 `.deploy`에 둔다. 데이터: `${DATA_ROOT}/{db,uploads}`. 실제 값·백업·실행 자료는 Git 제외.
 - 범위: [요구사항 목차](REQUIREMENTS.md). 완료 상세: [이력](docs/history.md).
