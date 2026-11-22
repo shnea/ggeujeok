@@ -33,6 +33,6 @@ SHNEA Platform에서 끄적이 소비할 외부 계약의 진입점이다. 내�
 
 ## 외부로 전달할 끄적 지침
 
-끄적 API가 구현되면 외부 사용자용 지침을 내부 설계와 별도로 제공한다. 형식은 기능 → 접근 가능한 계약/명세/예제 URL, 지원 여부·제약·필수 입력이다. 현재는 배포된 끄적 API나 공개 명세가 없어 빈 외부 가이드를 미리 만들지 않는다. n8n 제공 범위는 [자동화 기준](content.md#automation)을 따른다.
+배포된 블로그 관리 MCP의 주소·인증·도구·제약은 [MCP 연결 안내](assistant-mcp.md), 정기 운영의 실행 기준은 [에이전트 전달 지침](assistant-agent-instructions.md)을 따른다. 끄적 API와 외부 플랫폼의 계약을 구분하고, 미구현 범용 자동화 API를 사용 가능한 것으로 안내하지 않는다. n8n 제공 범위는 [자동화 기준](content.md#automation)을 따른다.
 
 플랫폼 닉네임의 사용·갱신 정책은 [사용자 인증 기준](users.md#auth)을 따른다. 외부 claim 계약은 [로그인 지침](https://platform.shnea.kr/integrations/auth.md)에서 확인한다.

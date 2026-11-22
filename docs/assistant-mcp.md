@@ -1,5 +1,7 @@
 # 끄적 AI 도우미 MCP 연결
 
+운영 에이전트에게 전달할 실행 지침은 [블로그 운영 에이전트 지침](assistant-agent-instructions.md)을 사용한다.
+
 ## 원격 연결
 
 1. [관리자 → 설정 → MCP 연결](https://shnea.kr/admin/settings#assistant-keys)에서 키를 발급한다. 정기 실행용 키에는 작성 권한을 켜고, 자동 공개나 비공개 전환이 필요할 때만 공개 권한을 켠다. 삭제 권한은 별도 키로 관리할 수 있다.

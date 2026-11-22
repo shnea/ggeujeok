@@ -37,6 +37,7 @@
 | 앱 내 알림 | [사용자: 알림](docs/users.md#notifications) |
 | 조회수·통계·감사·로그 | [운영: 관측](docs/operations.md#observability) |
 | Docker·환경 파일·배포·복구 | [운영: 배포](docs/operations.md#deployment) |
+| 프로젝트·개발 환경·운영 이관 | [이관 안내](docs/handover.md) |
 | 구조·구현 순서 | [구현 계획](docs/implementation-plan.md) |
 | 공통 플랫폼 연결 자료 | [플랫폼 자료 색인](docs/platform-integration.md) |
 
